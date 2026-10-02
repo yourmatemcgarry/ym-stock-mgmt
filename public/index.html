@@ -319,7 +319,12 @@ function skus(){const out=[];for(const p of S.products.slice().sort((a,b)=>(a.so
   for(const q of (p.packs||[])) if(q.active!==false) out.push({id:skuId(p.id,q.code),product:p,pack:q.code,packDef:q});
   return out;}
 const activeLocs=()=>S.locations.filter(l=>l.active!==false&&l.type!=="internal").sort((a,b)=>(a.sort|0)-(b.sort|0));
-const planOf=s=>S.plan[s]||(S.plan[s]={id:s,basis:{},method:{},manual:{},planned:{},targetUnits:{},targetWeeks:{},off:{}});
+const planOf=s=>{
+  const p=S.plan[s]||(S.plan[s]={id:s});
+  for(const k of ["basis","method","manual","planned","override","targetUnits","targetWeeks","off"])
+    if(!p[k]) p[k]={};
+  return p;
+};
 
 /* ============================ storage ============================ */
 const LS="coldroom-v1";
@@ -621,6 +626,16 @@ function skuHasActivity(sku,locId){
   return false;
 }
 
+/* Which distributors and channels this SKU actually goes to. Once someone has
+   chosen explicitly, that choice stands; until then it's inferred from history. */
+function channelsFor(sku){
+  const pl=planOf(sku);
+  if(Array.isArray(pl.channels))
+    return new Set(pl.channels.filter(id=>L(id)&&L(id).active!==false));
+  return new Set(activeLocs().filter(l=>skuHasActivity(sku,l.id)).map(l=>l.id));
+}
+function channelsAreExplicit(sku){ return Array.isArray(planOf(sku).channels); }
+
 function beerInFor(sku,weeks){
   const map={};
   for(const r of S.runs){
@@ -638,19 +653,20 @@ function compute(sku){
   const past=[]; for(let i=cfg.past;i>=0;i--) past.push(wkAdd(cw,-i));
   const pl=planOf(sku);
   const rows=[];
+  const chans=channelsFor(sku);
   for(const l of activeLocs()){
-    if(pl.off&&pl.off[l.id]) continue;
-    if(!skuHasActivity(sku,l.id)) continue;
+    if(!chans.has(l.id)) continue;
     const tracks=(l.type==="distributor"||l.type==="retail");
     const kUsed=histLoc(sku,"used",l.id), kOut=histLoc(sku,"out",l.id), kSoh=histLoc(sku,"soh",l.id);
     const basis=(pl.basis&&pl.basis[l.id])||cfg.defaultDrawBasis;
     const method=(pl.method&&pl.method[l.id])||(tracks?(l.method||cfg.defaultShipMethod):"direct");
     const manual=(pl.manual&&pl.manual[l.id])||{};
     const planned=(pl.planned&&pl.planned[l.id])||{};
+    const override=(pl.override&&pl.override[l.id])||{};
 
     if(!tracks){
       const ship=forecastSeries(sku,"out",kOut,weeks,basis,manual,cfg.avgWindow);
-      rows.push({loc:l,tracks:false,basis,method:"direct",ship,draw:null,soh:null,
+      rows.push({loc:l,tracks:false,basis,method:"direct",ship,draw:null,soh:null,manual,
         pastOut:past.map(w=>at(sku,"out",kOut,w)),
         avg:avgOf(sku,"out",kOut,cw,cfg.avgWindow)});
       continue;
@@ -673,7 +689,9 @@ function compute(sku){
         : (at(sku,"out",kOut,wkAdd(cw,1+k-lead))||0);
       soh = soh + arriving - draw[k];
       let ship=0;
+      const ov=num(override[weeks[k]]);
       if(method==="planned"){ ship=num(planned[weeks[k]])||0; }
+      else if(ov!=null){ ship=ov; }          /* we already know what's going */
       else {
         /* project forward over the lead time, counting what's already in transit */
         let p=soh;
@@ -687,6 +705,7 @@ function compute(sku){
       sohArr.push(soh); shipArr.push(ship);
     }
     rows.push({loc:l,tracks:true,basis,method,draw,ship:shipArr,soh:sohArr,target,avg:avgDraw,
+      planned,override,
       opening:openingSOH(sku,l.id),
       pastOut:past.map(w=>at(sku,"out",kOut,w)),
       pastDraw:past.map(w=>at(sku,drawField,drawKey,w)),
@@ -919,10 +938,21 @@ function skuGrid(s,c){
     el("span",{class:"chip"},"Coldroom "+n0(c.openCold)+" "+(PACK_UNIT[s.pack]||"").toLowerCase()),
     el("span",{class:"chip"},(c.cover[0]!=null?n1(c.cover[0]):"—")+" wks cover"),
     el("span",{class:"spacer",style:"flex:1"}),
-    el("span",{class:"hint"},n0(c.wkAvg)+"/wk out"));
+    el("span",{class:"hint"},n0(c.wkAvg)+"/wk out"),
+    el("button",{class:"btn sm",title:"Choose which distributors and channels this SKU goes to",
+      onclick:ev=>{ev.stopPropagation();editChannels(s);}},
+      c.rows.length+" channel"+(c.rows.length===1?"":"s")));
   wrap.append(head);
   if(!S.open[s.id]) return wrap;
 
+  if(!c.rows.length){
+    wrap.append(el("div",{class:"empty"},
+      el("b",{},"No channels chosen for "+s.product.name+" "+s.pack),
+      el("div",{},"Pick the distributors and channels it goes to and the forecast fills in."),
+      el("button",{class:"btn pri",style:"margin-top:12px",onclick:()=>editChannels(s)},
+        "Choose channels")));
+    return wrap;
+  }
   const axis=[...c.past,...c.weeks], cwIdx=c.past.length-1;
   const scroll=el("div",{class:"scroll"}), t=el("table",{class:"fg"});
   const thead=el("thead"), hr=el("tr",{});
@@ -942,22 +972,18 @@ function skuGrid(s,c){
     const tagcls=r.loc.type==="direct"?"":"d";
     // ship out row
     const tr1=el("tr",{class:"r-out"});
-    const lab=el("td",{class:"stick"},el("div",{class:"lbl"},
+    const lab=el("td",{class:"stick"});
+    const labrow=el("div",{class:"lbl"},
       el("span",{class:"tag "+tagcls},tag),
-      el("span",{style:"overflow:hidden;text-overflow:ellipsis"},r.loc.name)));
+      el("span",{style:"overflow:hidden;text-overflow:ellipsis;flex:1"},r.loc.name));
+    if(!r.tracks) labrow.append(sel(Object.entries(BASES).filter(([k])=>k!=="planned"),r.basis,
+      {class:"basis",title:"How this channel's demand is forecast",
+       onchange:e=>setBasis(s.id,r.loc.id,e.target.value)}));
+    lab.append(labrow);
     lab.title=r.loc.name+" — "+LOCTYPE[r.loc.type];
     tr1.append(lab);
     (r.pastOut||[]).forEach((v,i)=>tr1.append(vcell(v,i)));
-    r.ship.forEach((v,i)=>{
-      if(r.method==="planned"){
-        const w=c.weeks[i], pl=planOf(s.id);
-        const cur=(pl.planned[r.loc.id]||{})[w];
-        const td=el("td",{class:"v inp"+(cur!=null?" edited":"")});
-        td.append(el("input",{type:"text",inputmode:"numeric",value:cur!=null?n0(cur):"",
-          placeholder:n0(v)||"0",onchange:e=>setPlanned(s.id,r.loc.id,w,e.target.value)}));
-        tr1.append(td);
-      } else tr1.append(vcell(v,NP+i));
-    });
+    r.ship.forEach((v,i)=>tr1.append(shipCell(s.id,r,c.weeks[i],v)));
     tb.append(tr1);
     // their drawdown + SOH
     if(r.tracks){
@@ -1027,6 +1053,35 @@ function skuGrid(s,c){
       el("button",{class:"btn sm",style:"margin-left:6px",onclick:()=>newRun(s.id,c.brewBy)},"Schedule a run")));
   }
   return wrap;
+}
+/* Every shipping figure can be typed over. Where it lands depends on how the
+   location is replenished: an order plan, a known order against the auto top-up,
+   or a manual figure for a channel that ships straight from the coldroom. */
+function shipField(method){
+  return method==="planned"?"planned":method==="direct"?"manual":"override";
+}
+function shipCell(sku,r,wk,computed){
+  const field=shipField(r.method), pl=planOf(sku);
+  const cur=(pl[field]&&pl[field][r.loc.id]||{})[wk];
+  const set=cur!=null;
+  const td=el("td",{class:"v inp"+(set?" edited":"")});
+  const inp=el("input",{type:"text",inputmode:"numeric",value:set?n0(cur):"",
+    placeholder:n0(computed)||"0",
+    title:r.method==="target_soh"
+      ?(set?"Known order — clear this to go back to topping up to target"
+          :"Topping up to "+n0(r.target)+". Type a figure if you already know what's going.")
+      :r.method==="planned"?"What they've told us they're ordering"
+                           :"What we plan to send. Type a figure to fix it.",
+    onchange:e=>setShip(sku,r,wk,e.target.value)});
+  td.append(inp); return td;
+}
+function setShip(sku,r,wk,val){
+  const field=shipField(r.method), pl=planOf(sku);
+  pl[field][r.loc.id]=pl[field][r.loc.id]||{};
+  const v=num(val);
+  if(v==null) delete pl[field][r.loc.id][wk]; else pl[field][r.loc.id][wk]=v;
+  if(field==="manual") pl.basis[r.loc.id]="manual";   /* typed figures win */
+  persist("plan",pl); render();
 }
 function setPlanned(sku,loc,wk,val){const pl=planOf(sku);pl.planned[loc]=pl.planned[loc]||{};
   const v=num(val); if(v==null) delete pl.planned[loc][wk]; else pl.planned[loc][wk]=v;
@@ -1546,6 +1601,12 @@ function editProduct(p){
     b.append(pk);
     b.append(el("div",{class:"note"},"Send-by is best before minus half the shelf life set here, ",
       "so a 12-month can can't ship to a distributor with under 6 months left."));
+    if(isNew&&S.products.length){
+      b.append(field("Copy channels and targets from",
+        sel([["","Nothing — I'll choose them later"],
+             ...S.products.filter(x=>x.forecast!==false).map(x=>[x.id,x.name])],"",{id:"pcopy"}),
+        "Saves setting up every distributor again for a new beer"));
+    }
   },body=>{
     const name=$("#pn",body).value.trim();
     if(!name){flash("Give the product a name");return false;}
@@ -1556,7 +1617,21 @@ function editProduct(p){
       shelfLifeMonths:num($("#sh-"+slug(c),body).value)||PACK_SHELF[c],active:true}));
     if(isNew) S.products.push(rec);
     S.products.sort((a,b2)=>(a.sort|0)-(b2.sort|0));
-    persist("products",rec); flash(name+" saved");
+    persist("products",rec);
+    const from=isNew&&$("#pcopy",body)?$("#pcopy",body).value:"";
+    if(from){
+      let n=0;
+      for(const q of rec.packs){
+        const src=planOf(from+"__"+slug(q.code)), dst=planOf(rec.id+"__"+slug(q.code));
+        if(!S.hist[from+"__"+slug(q.code)]&&!S.plan[from+"__"+slug(q.code)]) continue;
+        dst.channels=Array.from(channelsFor(from+"__"+slug(q.code)));
+        dst.targetUnits=Object.assign({},src.targetUnits);
+        dst.method=Object.assign({},src.method);
+        dst.basis=Object.assign({},src.basis);
+        persist("plan",dst); n++;
+      }
+      flash(name+" saved — channels copied to "+n+" pack"+(n===1?"":"s"));
+    } else flash(name+" saved");
   });
 }
 function editLocation(l){
@@ -1598,6 +1673,43 @@ function editLocation(l){
 function toggleLoc(b,t){
   const type=t||$("#lt",b).value, tracks=(type==="distributor"||type==="retail");
   $("#lbox",b).style.display=tracks?"grid":"none";
+}
+
+/* ---- which distributors and channels a SKU goes to ---- */
+function editChannels(sku){
+  const pl=planOf(sku.id);
+  const chosen=channelsFor(sku.id);
+  const explicit=channelsAreExplicit(sku.id);
+  const groups=[["distributor","Distributors"],["retail","Retail chains"],["direct","Direct channels"]];
+  openDialog("Channels for "+sku.product.name+" "+sku.pack,b=>{
+    b.append(el("div",{class:"note"},
+      explicit?"These are set for this SKU."
+             :"Working this out from history at the moment. Tick or untick anything and it becomes the set list for this SKU.",
+      " Unticking a channel takes it out of the forecast; nothing already recorded against it is deleted."));
+    for(const [type,label] of groups){
+      const list=activeLocs().filter(l=>l.type===type);
+      if(!list.length) continue;
+      b.append(el("div",{class:"fld"},label));
+      const g=el("div",{class:"grid3"});
+      for(const l of list){
+        const had=skuHasActivity(sku.id,l.id);
+        g.append(el("label",{class:"row",style:"align-items:center;gap:7px"},
+          el("input",{type:"checkbox",id:"ch-"+l.id,checked:chosen.has(l.id)}),
+          el("span",{},l.name),
+          had?el("span",{class:"chip ok",title:"Has history for this SKU"},"used"):null));
+      }
+      b.append(g);
+    }
+    b.append(el("button",{class:"btn",type:"button",style:"align-self:flex-start",
+      onclick:()=>{delete pl.channels;persist("plan",pl);$("#dlg").close();render();
+        flash("Back to working channels out from history");}},
+      "Reset to automatic"));
+  },body=>{
+    const picked=activeLocs().filter(l=>{const c=$("#ch-"+l.id,body);return c&&c.checked;}).map(l=>l.id);
+    pl.channels=picked;
+    persist("plan",pl);
+    flash(sku.product.name+" "+sku.pack+" — "+picked.length+" channel"+(picked.length===1?"":"s"));
+  },"Save channels");
 }
 
 /* ============================ go ============================ */

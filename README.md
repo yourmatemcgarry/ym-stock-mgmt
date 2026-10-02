@@ -110,7 +110,10 @@ Taken from the conventions in the original sheet:
   8 weeks), or **manual**.
 - Replenishment is either **their order plan** — typed straight into the grid,
   usually 13 weeks out — or **top up to a target stock level** in their
-  warehouse.
+  warehouse. Either way, **any shipping figure can be typed over**: on a
+  top-up location a typed figure is a known order and is used instead of the
+  calculated one for that week, and clearing the cell hands it back to the
+  calculation. Typed figures show in bold.
 - The coldroom balance is opening stock, plus beer in from planned packaging
   runs, less everything shipped out. Where it goes negative, that's the
   stock-out week; the brew-by date works back from it using each product's
@@ -118,6 +121,20 @@ Taken from the conventions in the original sheet:
 - **Send by** is best before minus half the product's shelf life — the last date
   a batch can go to a distributor with half its life left. Shelf life is per
   product per pack in Setup, defaulting to 12 months for cans and 6 for kegs.
+
+## Setting a SKU up
+
+Each SKU's header on the Forecast screen has a **channels** button. It opens the
+list of distributors, retail chains and direct channels, with the ones this SKU
+goes to ticked. Until someone edits it the list is worked out from history;
+once edited, the choice stands. Unticking a channel takes it out of the
+forecast and deletes nothing. **Reset to automatic** goes back to inferring it.
+
+New distributors and channels are added under **Setup**, and so are new
+products — a product carries its packs, shelf life per pack and brew-to-pack
+time, and a new one can copy another product's channels and targets so a new
+beer doesn't mean setting up every distributor again. A SKU with no channels
+yet says so in the grid, with a button to pick them.
 
 ## The weekly routine
 
