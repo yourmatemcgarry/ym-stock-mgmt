@@ -301,7 +301,8 @@ const addMonths=(s,m)=>{const x=D(s);const d=x.getUTCDate();x.setUTCDate(1);x.se
 const PACKS=["Can","10 Pack","Keg","30L Keg"];
 const PACK_UNIT={"Can":"Cartons","10 Pack":"Cartons","Keg":"50L Kegs","30L Keg":"30L Kegs"};
 const PACK_SHELF={"Can":12,"10 Pack":12,"Keg":6,"30L Keg":6};
-const BASES={prior_year:"Prior year",recent_avg:"Recent average",manual:"Manual entry",planned:"Distributor plan"};
+const BASES={prior_year:"Prior year",recent_avg:"Recent average",manual:"Manual entry",
+             model:"Like another SKU",planned:"Distributor plan"};
 const LOCTYPE={distributor:"Distributor",retail:"Retail chain",direct:"Direct channel",internal:"Internal"};
 
 /* ============================ state ============================ */
@@ -597,18 +598,39 @@ function keyScreen(){
 /* ============================ forecast engine ============================ */
 function roundTo(v,m){ if(!m||m<=1) return Math.max(0,Math.round(v)); return Math.max(0,Math.ceil(v/m)*m); }
 
-function forecastSeries(sku,field,locKey,weeks,basis,manualMap,avgWin){
-  const cw=S.config.currentWeek, out=[];
-  const avg=avgOf(sku,field,locKey,cw,avgWin);
-  for(const w of weeks){
-    let v=0;
-    if(basis==="manual"){ v=manualMap&&manualMap[w]!=null?manualMap[w]:null;
-      if(v==null){ const py=at(sku,field,locKey,wkAdd(w,-52)); v=py!=null?py:avg; } }
-    else if(basis==="recent_avg"){ v=avg; }
-    else { const py=at(sku,field,locKey,wkAdd(w,-52)); v=py!=null?py:avg; }
-    out.push(Math.max(0,v||0));
+/* A new beer has no history of its own, so it can be modelled on one that has:
+   same week last year from the reference SKU, scaled, optionally reading a
+   different channel. Set per SKU; used explicitly by the "Like another SKU"
+   basis, and as the fallback whenever this SKU has nothing of its own. */
+function modelAt(sku,field,locId,wk){
+  const m=planOf(sku).model;
+  if(!m||!m.sku||m.sku===sku||!locId) return null;
+  const src=m.loc||locId, pct=(m.pct==null?100:m.pct)/100;
+  /* a distributor's drawdown is "used" where the reference SKU has it, else "out" */
+  const fields=field==="used"?["used","out"]:field==="out"?["out","used"]:[field];
+  for(const f of fields){
+    const k=histLoc(m.sku,f,src);
+    let v=at(m.sku,f,k,wkAdd(wk,-52));
+    if(v==null) v=avgOf(m.sku,f,k,S.config.currentWeek,S.config.avgWindow)||null;
+    if(v!=null) return v*pct;
   }
-  return out;
+  return null;
+}
+function forecastSeries(sku,field,locKey,weeks,basis,manualMap,avgWin,locId){
+  const cw=S.config.currentWeek;
+  const avg=avgOf(sku,field,locKey,cw,avgWin);
+  const ownHistory=tail(sku,field,locKey,cw,avgWin).length>0;
+  const pick=w=>{
+    if(basis==="manual"&&manualMap&&manualMap[w]!=null) return manualMap[w];
+    if(basis==="model"){ const m=modelAt(sku,field,locId,w); if(m!=null) return m; }
+    if(basis==="recent_avg"&&ownHistory) return avg;
+    const py=at(sku,field,locKey,wkAdd(w,-52));
+    if(py!=null) return py;
+    const m=modelAt(sku,field,locId,w);     /* nothing of our own for this week */
+    if(m!=null) return m;
+    return avg;
+  };
+  return weeks.map(w=>Math.max(0,pick(w)||0));
 }
 
 function skuHasActivity(sku,locId){
@@ -628,13 +650,24 @@ function skuHasActivity(sku,locId){
 
 /* Which distributors and channels this SKU actually goes to. Once someone has
    chosen explicitly, that choice stands; until then it's inferred from history. */
-function channelsFor(sku){
+function channelsFor(sku,seen){
+  seen=seen||new Set();
+  if(seen.has(sku)) return new Set();
+  seen.add(sku);
   const pl=planOf(sku);
   if(Array.isArray(pl.channels))
     return new Set(pl.channels.filter(id=>L(id)&&L(id).active!==false));
-  return new Set(activeLocs().filter(l=>skuHasActivity(sku,l.id)).map(l=>l.id));
+  const own=activeLocs().filter(l=>skuHasActivity(sku,l.id)).map(l=>l.id);
+  if(own.length||!pl.model||!pl.model.sku) return new Set(own);
+  return channelsFor(pl.model.sku,seen);   /* brand new: follow what it's modelled on */
 }
 function channelsAreExplicit(sku){ return Array.isArray(planOf(sku).channels); }
+/* has this SKU shipped anywhere in its own right? */
+function skuHasOwnHistory(sku){
+  const cw=S.config.currentWeek;
+  return activeLocs().some(l=>["out","used","soh"].some(f=>
+    tail(sku,f,histLoc(sku,f,l.id),cw,12).some(v=>v>0)));
+}
 
 function beerInFor(sku,weeks){
   const map={};
@@ -665,7 +698,7 @@ function compute(sku){
     const override=(pl.override&&pl.override[l.id])||{};
 
     if(!tracks){
-      const ship=forecastSeries(sku,"out",kOut,weeks,basis,manual,cfg.avgWindow);
+      const ship=forecastSeries(sku,"out",kOut,weeks,basis,manual,cfg.avgWindow,l.id);
       rows.push({loc:l,tracks:false,basis,method:"direct",ship,draw:null,soh:null,manual,
         pastOut:past.map(w=>at(sku,"out",kOut,w)),
         avg:avgOf(sku,"out",kOut,cw,cfg.avgWindow)});
@@ -674,7 +707,13 @@ function compute(sku){
     /* distributor / retail: their drawdown drives their SOH, we replenish */
     let drawKey=kUsed, drawField="used";
     if(!tail(sku,"used",kUsed,cw,12).length){ drawKey=kOut; drawField="out"; }
-    const draw=forecastSeries(sku,drawField,drawKey,weeks,basis,manual,cfg.avgWindow);
+    /* nothing of our own to go on: match whichever series the reference SKU keeps,
+       so a modelled drawdown is compared against a drawdown */
+    if(pl.model&&pl.model.sku&&!tail(sku,drawField,drawKey,cw,12).length){
+      const msrc=pl.model.loc||l.id;
+      if(tail(pl.model.sku,"used",histLoc(pl.model.sku,"used",msrc),cw,12).length) drawField="used";
+    }
+    const draw=forecastSeries(sku,drawField,drawKey,weeks,basis,manual,cfg.avgWindow,l.id);
     const avgDraw=Math.max(0,avgOf(sku,drawField,drawKey,cw,cfg.avgWindow)||sum(draw)/Math.max(1,draw.length));
     const tW=(pl.targetWeeks&&pl.targetWeeks[l.id])!=null?pl.targetWeeks[l.id]:(l.targetWeeks||3);
     const tU=(pl.targetUnits&&pl.targetUnits[l.id]);
@@ -847,6 +886,13 @@ function seedBanner(){
   bar.append(body); return bar;
 }
 
+function skuLabel(id){
+  const s=skus().find(x=>x.id===id);
+  if(s) return s.product.name+" "+s.pack;
+  const h=S.hist[id];
+  return h?(h.productName+" "+h.pack):id;
+}
+
 /* ============================ shared bits ============================ */
 function packFilterCtl(ctl,key){
   const packs=["all",...PACKS.filter(p=>skus().some(s=>s.pack===p))];
@@ -941,7 +987,14 @@ function skuGrid(s,c){
     el("span",{class:"hint"},n0(c.wkAvg)+"/wk out"),
     el("button",{class:"btn sm",title:"Choose which distributors and channels this SKU goes to",
       onclick:ev=>{ev.stopPropagation();editChannels(s);}},
-      c.rows.length+" channel"+(c.rows.length===1?"":"s")));
+      c.rows.length+" channel"+(c.rows.length===1?"":"s")),
+    (()=>{const m=planOf(s.id).model;
+      /* only worth offering where there's no history to forecast from, or one is already set */
+      if(!(m&&m.sku)&&skuHasOwnHistory(s.id)) return null;
+      return el("button",{class:"btn sm",style:"margin-left:6px",
+        title:"Forecast this SKU from another one's history — for a beer with no history of its own",
+        onclick:ev=>{ev.stopPropagation();editModel(s);}},
+        m&&m.sku?("like "+skuLabel(m.sku)+(m.pct!=null&&m.pct!==100?" "+m.pct+"%":"")):"Model on…");})());
   wrap.append(head);
   if(!S.open[s.id]) return wrap;
 
@@ -1263,8 +1316,12 @@ function editEntry(st,e){
     persist("stocktakes",st);
   });
 }
-function syncPacks(b,keep){
-  const p=P($("#ep",b).value), k=$("#ek",b), cur=keep||k.value;
+/* The stocktake dialog and the run dialog use different field ids, so the
+   pack list has to be told which pair to read. */
+function syncPacks(b,keep,prodId,packId){
+  const ps=$("#"+(prodId||"ep"),b), k=$("#"+(packId||"ek"),b);
+  if(!ps||!k) return;
+  const p=P(ps.value), cur=keep||k.value;
   clear(k); for(const q of ((p&&p.packs)||[]).length?p.packs:PACKS.map(c=>({code:c})))
     k.append(el("option",{value:q.code,selected:q.code===cur},q.code));
 }
@@ -1344,18 +1401,17 @@ function newRun(sku,packDate,units,existing){
     packDate:packDate||wkAdd(S.config.currentWeek,2),units:units||"",status:"planned",note:""};
   openDialog(existing?"Edit packaging run":"Schedule packaging run",b=>{
     b.append(el("div",{class:"grid2"},
-      field("Product",sel(S.products.map(p=>[p.id,p.name]),r.productId,{id:"rp",onchange:()=>{syncPacks(b);syncBrew(b);}})),
+      field("Product",sel(S.products.map(p=>[p.id,p.name]),r.productId,{id:"rp",onchange:()=>{syncPacks(b,null,"rp","rk");syncBrew(b);}})),
       field("Pack",sel(PACKS.map(p=>[p,p]),r.pack,{id:"rk",onchange:()=>syncBrew(b)}))));
     b.append(el("div",{class:"grid3"},
       field("Pack date",el("input",{type:"date",id:"rd",value:r.packDate,onchange:()=>syncBrew(b)})),
       field("Units",el("input",{type:"number",id:"ru",value:r.units,placeholder:"576"})),
       field("Status",sel([["planned","Planned"],["confirmed","Confirmed"],["cancelled","Cancelled"]],r.status,{id:"rs"}))));
     b.append(el("div",{class:"note",id:"rbrew"},"—"));
-    field("","");
     b.append(field("Note",el("input",{type:"text",id:"rn",value:r.note||"",placeholder:"Tank 4, double batch"})));
     if(existing) b.append(el("button",{class:"btn danger",type:"button",style:"align-self:flex-start",
       onclick:()=>{S.runs=S.runs.filter(x=>x.id!==r.id);remove("runs",r.id);$("#dlg").close();render();}},"Delete run"));
-    syncPacks(b,r.pack); syncBrew(b);
+    syncPacks(b,r.pack,"rp","rk"); syncBrew(b);
   },body=>{
     const rec={id:r.id,productId:$("#rp",body).value,pack:$("#rk",body).value,packDate:$("#rd",body).value,
       units:num($("#ru",body).value)||0,status:$("#rs",body).value,note:$("#rn",body).value.trim()};
@@ -1700,16 +1756,54 @@ function editChannels(sku){
       }
       b.append(g);
     }
-    b.append(el("button",{class:"btn",type:"button",style:"align-self:flex-start",
-      onclick:()=>{delete pl.channels;persist("plan",pl);$("#dlg").close();render();
-        flash("Back to working channels out from history");}},
-      "Reset to automatic"));
+    const m=pl.model;
+    b.append(el("div",{class:"row"},
+      el("button",{class:"btn",type:"button",
+        onclick:()=>{delete pl.channels;persist("plan",pl);$("#dlg").close();render();
+          flash("Back to working channels out from history");}},
+        "Reset to automatic"),
+      el("button",{class:"btn",type:"button",
+        onclick:()=>{$("#dlg").close();setTimeout(()=>editModel(sku),60);}},
+        m&&m.sku?("Modelled on "+skuLabel(m.sku)+" — change")
+                :"Forecast this SKU off another one…")));
   },body=>{
     const picked=activeLocs().filter(l=>{const c=$("#ch-"+l.id,body);return c&&c.checked;}).map(l=>l.id);
     pl.channels=picked;
     persist("plan",pl);
     flash(sku.product.name+" "+sku.pack+" — "+picked.length+" channel"+(picked.length===1?"":"s"));
   },"Save channels");
+}
+
+/* ---- forecast a new SKU from one that has history ---- */
+function editModel(sku){
+  const pl=planOf(sku.id), m=pl.model||{};
+  const others=skus().filter(x=>x.id!==sku.id&&S.hist[x.id])
+    .sort((a,b)=>(a.product.name+a.pack).localeCompare(b.product.name+b.pack));
+  openDialog("Model "+sku.product.name+" "+sku.pack+" on another SKU",b=>{
+    b.append(el("div",{class:"note"},
+      "A new beer has no history to forecast from. Pick one that does and this SKU uses its ",
+      el("b",{},"same week last year"),
+      " figures, scaled. Any channel still set to prior year or recent average falls back to this ",
+      "when it has nothing of its own, and you can set a channel to ",
+      el("b",{},"Like another SKU")," to use it outright."));
+    b.append(el("div",{class:"grid3"},
+      field("Forecast from",sel([["","Nothing — use this SKU's own history"],
+        ...others.map(x=>[x.id,x.product.name+" "+x.pack])],m.sku||"",{id:"mk"})),
+      field("At",el("input",{type:"number",id:"mp",value:m.pct==null?100:m.pct,min:"1",max:"500"}),
+        "% of it — 60 means it sells at 60% the rate"),
+      field("Channel",sel([["","Match channel for channel"],
+        ...activeLocs().map(l=>[l.id,"Always use "+l.name])],m.loc||"",{id:"ml"}),
+        "Where to read that SKU's history from")));
+    if(m.sku) b.append(el("button",{class:"btn danger",type:"button",style:"align-self:flex-start",
+      onclick:()=>{delete pl.model;persist("plan",pl);$("#dlg").close();render();
+        flash("Model removed");}},"Stop modelling"));
+  },body=>{
+    const src=$("#mk",body).value;
+    if(!src){ delete pl.model; persist("plan",pl); flash("Model removed"); return; }
+    pl.model={sku:src,pct:num($("#mp",body).value)||100,loc:$("#ml",body).value||null};
+    persist("plan",pl);
+    flash(sku.product.name+" "+sku.pack+" now forecast from "+skuLabel(src));
+  },"Save");
 }
 
 /* ============================ go ============================ */

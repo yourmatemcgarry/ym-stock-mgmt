@@ -130,6 +130,14 @@ goes to ticked. Until someone edits it the list is worked out from history;
 once edited, the choice stands. Unticking a channel takes it out of the
 forecast and deletes nothing. **Reset to automatic** goes back to inferring it.
 
+A SKU with no history of its own can be **modelled on one that has**: pick a
+reference SKU, a percentage, and whether to match channel for channel or always
+read one named channel. It then forecasts from that SKU's same-week-last-year
+figures, scaled. Any channel left on prior year or recent average falls back to
+the model when it has nothing of its own, and a channel can be set to *Like
+another SKU* to use it outright. The option appears on a SKU's header while it
+has no history, and inside the channels dialog at any time.
+
 New distributors and channels are added under **Setup**, and so are new
 products — a product carries its packs, shelf life per pack and brew-to-pack
 time, and a new one can copy another product's channels and targets so a new
