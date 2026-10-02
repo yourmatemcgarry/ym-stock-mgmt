@@ -21,7 +21,8 @@ and channels).
 3. Deploy. Open the site and press **Load starting data** once. That reads
    `public/seed.json` and writes it into the site's blob store: products,
    distributors and channels, two years of weekly history, the plan settings,
-   and every stocktake up to w/c 28 September 2026.
+   and every stocktake up to w/c 28 September 2026, plus the packaging runs
+   from the Beer In rows (recent ones and everything planned ahead).
 
 That import only needs doing once, on the first deploy. Redeploys don't touch
 the stored data — it lives in Netlify Blobs, not in the repo.
@@ -67,6 +68,20 @@ header when a passphrase is set.
 
 Collections: `config`, `products`, `locations`, `history`, `plan`,
 `stocktakes`, `runs`.
+
+## Where the data came from
+
+Everything was imported from the Stock Management Sheet as at 2 October 2026 and
+checked back against it cell by cell: 34,166 weekly history values, 136
+packaging runs and 921 stocktake lines, with no differences. Two row types in
+the sheet are deliberately not imported because they restate rows above them —
+the `Total` roll-up, and the `YM` drawdown row, which covers stock already
+counted under `YM Taproom`.
+
+The sheet's forward `A - Stock Out` figures for the retail chains were brought
+across as their order plans, and for the direct channels as manual figures, so
+the app starts out agreeing with the sheet. Change any of them per location in
+the forecast grid.
 
 ## How the forecast works
 
