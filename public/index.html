@@ -388,6 +388,9 @@ async function boot(){
   const lastSt=S.stock[0];
   if(lastSt&&wkDiff(S.config.currentWeek,lastSt.weekStart)>0) S.config.currentWeek=lastSt.weekStart;
   render();
+  if(b&&b.kind==="rest") checkSeedVersion().then(meta=>{
+    if(meta){ S.seedUpdate=meta; render(); }
+  });
 }
 function seedBlank(){
   S.locations=[{id:"coldroom",name:"Coldroom",type:"internal",method:"none",active:true,sort:99}];
@@ -496,19 +499,45 @@ async function openBackend(){
   return null;
 }
 
-/* ---- first-run import of the starting data shipped with the site ---- */
-async function importSeed(onProgress){
-  const r=await fetch("seed.json",{cache:"no-store"});
-  if(!r.ok) throw new Error("Couldn't read seed.json ("+r.status+")");
-  const seed=await r.json();
-  let done=0;
+/* ---- import the data file shipped with the site ----
+   Runs on first use, and again whenever a new build is deployed: every document
+   in the file is written over the top. Anything not in the file (a stocktake
+   entered here, a run added by hand) is left alone. */
+async function fetchSeed(){
+  const r=await fetch("seed.json?t="+Date.now(),{cache:"no-store"});
+  if(!r.ok) throw new Error("Couldn't read seed.json from the site ("+r.status+")");
+  return r.json();
+}
+async function importSeed(onProgress,seed){
+  seed=seed||await fetchSeed();
   const all=[];
   for(const kind of KINDS) for(const doc of (seed[kind]||[])) all.push([kind,doc]);
+  let done=0;
   for(const [kind,doc] of all){
     await S.backend.set(kind,doc);
     done++; if(onProgress) onProgress(done,all.length);
   }
+  if(seed.meta){
+    const cfg=Object.assign({},S.config,{id:"app",dataStamp:seed.meta.generated,
+      dataSource:seed.meta.source});
+    await S.backend.set("config",cfg);
+    Object.assign(S.config,cfg);
+  }
   return all.length;
+}
+/* The data lives in the site's store, not the deploy, so a new build can carry
+   data the store has never seen. The version file is small enough to check on load. */
+async function checkSeedVersion(){
+  try{
+    const r=await fetch("seed-version.json?t="+Date.now(),{cache:"no-store"});
+    if(!r.ok) return null;
+    const meta=await r.json();
+    if(meta&&meta.generated&&meta.generated!==S.config.dataStamp) return meta;
+  }catch(e){}
+  return null;
+}
+function seedSummary(seed){
+  return KINDS.map(k=>((seed[k]||[]).length)+" "+k).filter(x=>!x.startsWith("0 ")).join(", ");
 }
 
 function setupScreen(){
@@ -766,6 +795,7 @@ function render(){
   $("#curWeek").textContent=fmtWY(S.config.currentWeek);
   drawNav();
   const pane=clear($("#pane")), ctl=clear($("#topctl"));
+  if(S.seedUpdate) pane.append(seedBanner());
   try{
     ({forecast:viewForecast,stocktake:viewStocktake,production:viewProduction,
       ageing:viewAgeing,setup:viewSetup}[S.view])(pane,ctl,v);
@@ -774,6 +804,28 @@ function render(){
     pane.append(el("div",{class:"card"},el("div",{class:"empty"},
       el("b",{},"Something went wrong drawing this screen"),String(e&&e.message||e))));
   }
+}
+
+function seedBanner(){
+  const m=S.seedUpdate, c=m.counts||{};
+  const bar=el("div",{class:"card",style:"border-color:var(--warn);margin-bottom:14px"});
+  const body=el("div",{class:"body",style:"display:flex;gap:12px;align-items:center;flex-wrap:wrap"});
+  body.append(el("div",{style:"flex:1;min-width:280px"},
+    el("b",{},"This deploy has newer data than the site is showing. "),
+    el("span",{class:"dim"},"Built "+fmtD((m.generated||"").slice(0,10))+
+      (c.runs!=null?" · "+c.runs+" packaging runs, "+(c.stocktakes||0)+" stocktakes":"")+
+      ". Stock data lives in the site's store, so a deploy doesn't load itself.")));
+  const st=el("span",{class:"hint"},"");
+  const go=el("button",{class:"btn pri",onclick:async()=>{
+    go.disabled=true; st.textContent="Importing…";
+    try{
+      const n=await importSeed((d,t)=>{st.textContent="Writing "+d+" of "+t+"…";});
+      st.textContent="Imported "+n+" records. Reloading…";
+      setTimeout(()=>location.reload(),500);
+    }catch(e){ go.disabled=false; st.textContent="That didn't work: "+e.message; }
+  }},"Import it now");
+  body.append(go,st,el("button",{class:"btn",onclick:()=>{S.seedUpdate=null;render();}},"Not now"));
+  bar.append(body); return bar;
 }
 
 /* ============================ shared bits ============================ */
@@ -1411,6 +1463,40 @@ function viewSetup(pane,ctl){
       el("td",{},el("button",{class:"btn sm",onclick:()=>editLocation(l)},"Edit"))));
   }
   lt.append(lb);lw.append(lt);lc.append(lw);pane.append(lc);
+
+  /* data loaded into this site */
+  if(S.backend&&S.backend.kind==="rest"){
+    const dc=el("div",{class:"card"});
+    dc.append(el("header",{},el("h3",{},"Data in this site"),
+      el("span",{class:"chip "+(S.config.dataStamp?"ok":"warn")},
+        S.config.dataStamp?("loaded from the sheet export of "+fmtD(S.config.dataStamp.slice(0,10)))
+                          :"vintage unknown")));
+    const db=el("div",{class:"body"});
+    db.append(el("div",{class:"note"},el("b",{},"Deployed a new build? "),
+      "The data lives in the site's own store, not in the deploy, so a new ",
+      el("span",{class:"mono"},"seed.json"),
+      " is not picked up on its own. Re-import writes every record in the deployed file over the top. ",
+      "Stocktakes and runs you have entered here that aren't in the file are left alone."));
+    const st2=el("div",{class:"hint"},"");
+    const btn=el("button",{class:"btn pri",onclick:async()=>{
+      btn.disabled=true; st2.textContent="Reading the deployed file…";
+      try{
+        const seed=await fetchSeed();
+        if(!confirm("Re-import "+seedSummary(seed)+" from the deployed file?\n\n"
+                   +"Records with the same id are overwritten.")){
+          btn.disabled=false; st2.textContent=""; return; }
+        const n=await importSeed((d,t)=>{st2.textContent="Writing "+d+" of "+t+"…";},seed);
+        st2.textContent="Re-imported "+n+" records. Reloading…";
+        setTimeout(()=>location.reload(),600);
+      }catch(e){ btn.disabled=false; st2.textContent="That didn't work: "+e.message; }
+    }},"Re-import from the deployed file");
+    db.append(el("div",{class:"row"},btn,st2));
+    db.append(el("div",{class:"hint"},
+      S.products.length+" products · "+S.locations.length+" locations · "
+      +Object.keys(S.hist).length+" history series · "+S.stock.length+" stocktakes · "
+      +S.runs.length+" packaging runs · current week "+fmtD(S.config.currentWeek)));
+    dc.append(db); pane.append(dc);
+  }
 
   /* settings */
   const sc=el("div",{class:"card"});

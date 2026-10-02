@@ -24,8 +24,21 @@ and channels).
    and every stocktake up to w/c 28 September 2026, plus the packaging runs
    from the Beer In rows (recent ones and everything planned ahead).
 
-That import only needs doing once, on the first deploy. Redeploys don't touch
-the stored data — it lives in Netlify Blobs, not in the repo.
+## Deploying new data
+
+The data lives in the site's blob store, **not** in the deploy, so pushing a
+build with a new `public/seed.json` does not load it on its own — the site keeps
+showing what it already has.
+
+When a deploy carries newer data the app says so: a bar appears across the top
+of every screen — *"This deploy has newer data than the site is showing"* — with
+an **Import it now** button. Pressing it writes every record in the deployed
+file over the top. Anything not in the file (a stocktake entered in the app, a
+run added by hand) is left alone.
+
+The same control sits permanently under **Setup -> Data in this site**, with the
+date of the export the live data came from, so you can always tell which vintage
+you are looking at.
 
 ## The passphrase
 
