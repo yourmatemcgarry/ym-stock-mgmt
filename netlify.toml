@@ -1,0 +1,20 @@
+[build]
+  publish = "public"
+
+[functions]
+  node_bundler = "esbuild"
+
+# The stock figures are commercial data. Keep the site out of search engines
+# even though the URL isn't published anywhere.
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Robots-Tag = "noindex, nofollow"
+    X-Frame-Options = "SAMEORIGIN"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "no-referrer"
+
+[[headers]]
+  for = "/seed.json"
+  [headers.values]
+    Cache-Control = "no-store"

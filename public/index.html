@@ -1,0 +1,1522 @@
+<!doctype html>
+<html lang="en-AU">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta name="theme-color" content="#0B5563">
+<title>Coldroom</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+:root{
+  --ground:#EDF1F2; --surface:#FFFFFF; --surface-2:#F5F8F9; --sunk:#E2E9EB;
+  --ink:#101619; --ink-2:#37474E; --muted:#63767E; --faint:#8C9CA3;
+  --line:#D2DCDF; --line-soft:#E4EBED;
+  --accent:#0B5563; --accent-2:#0E6E80; --accent-soft:#DDEBEE; --accent-ink:#083F4A;
+  --ok:#1C7A46; --ok-soft:#DDEFE4;
+  --warn:#9A6206; --warn-soft:#F6EBD6;
+  --crit:#A82D25; --crit-soft:#F7E1DF;
+  --shadow:0 1px 2px rgba(16,22,25,.06), 0 8px 24px -12px rgba(16,22,25,.18);
+  --r:6px;
+  --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  --sans:"IBM Plex Sans",system-ui,-apple-system,Segoe UI,sans-serif;
+  --disp:"Archivo","IBM Plex Sans",system-ui,sans-serif;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --ground:#0F1518; --surface:#171F23; --surface-2:#1D272B; --sunk:#131B1E;
+    --ink:#E7EEF0; --ink-2:#C3D0D4; --muted:#93A5AC; --faint:#6F8189;
+    --line:#2B383D; --line-soft:#222D31;
+    --accent:#54B4C6; --accent-2:#6FC8D8; --accent-soft:#17323A; --accent-ink:#9BD8E4;
+    --ok:#5CC488; --ok-soft:#16302270; --warn:#E0A845; --warn-soft:#33270E70;
+    --crit:#F08076; --crit-soft:#3A1D1A70;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 28px -14px rgba(0,0,0,.7);
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#0F1518; --surface:#171F23; --surface-2:#1D272B; --sunk:#131B1E;
+  --ink:#E7EEF0; --ink-2:#C3D0D4; --muted:#93A5AC; --faint:#6F8189;
+  --line:#2B383D; --line-soft:#222D31;
+  --accent:#54B4C6; --accent-2:#6FC8D8; --accent-soft:#17323A; --accent-ink:#9BD8E4;
+  --ok:#5CC488; --ok-soft:#16302270; --warn:#E0A845; --warn-soft:#33270E70;
+  --crit:#F08076; --crit-soft:#3A1D1A70;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 28px -14px rgba(0,0,0,.7);
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--ground);color:var(--ink);font:400 14px/1.5 var(--sans);
+  -webkit-font-smoothing:antialiased;font-variant-numeric:tabular-nums}
+h1,h2,h3,h4{font-family:var(--disp);margin:0;text-wrap:balance;letter-spacing:-.012em}
+button,input,select,textarea{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--accent-2);outline-offset:1px;border-radius:3px}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+
+/* ---------- shell ---------- */
+.app{display:grid;grid-template-columns:216px 1fr;min-height:100vh}
+.rail{background:var(--surface);border-right:1px solid var(--line);display:flex;flex-direction:column;
+  position:sticky;top:0;height:100vh;overflow-y:auto}
+.brand{padding:18px 18px 14px;border-bottom:1px solid var(--line-soft);display:flex;flex-direction:column;gap:3px}
+.brand .mk{font-family:var(--disp);font-weight:700;font-size:17px;letter-spacing:-.02em;display:flex;align-items:center;gap:8px}
+.brand .mk i{width:9px;height:9px;border-radius:50%;background:var(--accent);flex:none;box-shadow:0 0 0 3px var(--accent-soft)}
+.brand small{color:var(--faint);font-size:11px;letter-spacing:.07em;text-transform:uppercase;font-weight:500}
+.nav{padding:10px 10px;display:flex;flex-direction:column;gap:1px}
+.nav button{display:flex;align-items:center;gap:10px;width:100%;text-align:left;background:none;border:0;
+  padding:8px 10px;border-radius:var(--r);color:var(--ink-2);cursor:pointer;font-weight:500}
+.nav button:hover{background:var(--surface-2)}
+.nav button[aria-current="true"]{background:var(--accent-soft);color:var(--accent-ink);font-weight:600}
+.nav svg{width:16px;height:16px;flex:none;stroke:currentColor;fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.nav .ct{margin-left:auto;font:600 11px/1 var(--mono);padding:3px 5px;border-radius:4px;background:var(--crit-soft);color:var(--crit)}
+.railfoot{margin-top:auto;padding:12px;border-top:1px solid var(--line-soft);display:flex;flex-direction:column;gap:8px}
+.wk{font:500 11px/1.4 var(--mono);color:var(--muted)}
+.wk b{display:block;font:600 13px/1.4 var(--mono);color:var(--ink)}
+.sync{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--faint)}
+.sync i{width:6px;height:6px;border-radius:50%;background:var(--faint);flex:none}
+.sync.on i{background:var(--ok)}
+.sync.off i{background:var(--warn)}
+
+.main{min-width:0;display:flex;flex-direction:column}
+.top{position:sticky;top:0;z-index:30;background:var(--surface);border-bottom:1px solid var(--line);
+  padding:14px 22px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+.top h1{font-size:19px;font-weight:600}
+.top .sub{color:var(--muted);font-size:12.5px;margin-top:1px}
+.spacer{flex:1}
+.pane{padding:20px 22px 64px;min-width:0}
+
+/* ---------- controls ---------- */
+.btn{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:6px 11px;
+  cursor:pointer;font-weight:500;font-size:13px;color:var(--ink-2);display:inline-flex;align-items:center;gap:6px}
+.btn:hover{border-color:var(--accent);color:var(--accent-ink)}
+.btn.pri{background:var(--accent);border-color:var(--accent);color:#fff}
+:root[data-theme="dark"] .btn.pri,:root:not([data-theme="light"]) .btn.pri{color:#08191D}
+@media (prefers-color-scheme:light){:root:not([data-theme="dark"]) .btn.pri{color:#fff}}
+.btn.pri:hover{background:var(--accent-2);border-color:var(--accent-2)}
+.btn.sm{padding:3px 8px;font-size:12px}
+.btn.danger:hover{border-color:var(--crit);color:var(--crit)}
+.seg{display:inline-flex;background:var(--sunk);border-radius:var(--r);padding:2px;gap:2px}
+.seg button{background:none;border:0;padding:5px 10px;border-radius:4px;cursor:pointer;font-size:12.5px;
+  font-weight:500;color:var(--muted)}
+.seg button[aria-pressed="true"]{background:var(--surface);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.10)}
+select,input[type=text],input[type=number],input[type=date],textarea{background:var(--surface);border:1px solid var(--line);
+  border-radius:var(--r);padding:5px 8px;font-size:13px;min-width:0}
+input[type=number]{font-family:var(--mono)}
+label.fld{display:flex;flex-direction:column;gap:4px;font-size:11.5px;font-weight:600;color:var(--muted);
+  letter-spacing:.04em;text-transform:uppercase}
+label.fld > *{text-transform:none;letter-spacing:0;font-weight:400;color:var(--ink)}
+.row{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap}
+
+/* ---------- cards / tiles ---------- */
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(158px,1fr));gap:1px;background:var(--line-soft);
+  border:1px solid var(--line);border-radius:var(--r);overflow:hidden;margin-bottom:18px}
+.tile{background:var(--surface);padding:12px 14px;display:flex;flex-direction:column;gap:3px}
+.tile .k{font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);font-weight:600}
+.tile .v{font:600 22px/1.15 var(--disp);letter-spacing:-.02em}
+.tile .n{font-size:11.5px;color:var(--muted)}
+.tile.alert .v{color:var(--crit)} .tile.warn .v{color:var(--warn)} .tile.good .v{color:var(--ok)}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);margin-bottom:14px;overflow:hidden}
+.card > header{padding:11px 14px;border-bottom:1px solid var(--line-soft);display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.card > header h3{font-size:14.5px;font-weight:600}
+.card .body{padding:14px}
+.empty{padding:34px 18px;text-align:center;color:var(--muted);font-size:13px}
+.empty b{display:block;color:var(--ink);font-family:var(--disp);font-size:15px;margin-bottom:4px}
+
+/* ---------- inline stocktake entry ---------- */
+td.cell{padding:2px}
+input.cellinp{width:100%;min-width:92px;border:1px solid transparent;background:var(--surface-2);
+  padding:5px 8px;border-radius:4px;font-size:13px;color:inherit}
+input.cellinp:hover{border-color:var(--line)}
+input.cellinp.num{text-align:right;font-family:var(--mono);font-size:12.5px;min-width:68px}
+input.cellinp:focus{background:var(--accent-soft);border-color:var(--accent);
+  outline:2px solid var(--accent);outline-offset:-2px}
+tbody tr:hover input.cellinp{background:var(--surface)}
+tbody tr[data-zero="true"] input.cellinp.qty{background:var(--warn-soft);color:var(--warn);font-weight:600}
+tbody tr[data-zero="true"] input.cellinp.qty:focus{background:var(--accent-soft);color:var(--ink)}
+
+/* ---------- chips ---------- */
+.chip{display:inline-flex;align-items:center;gap:4px;font:600 10.5px/1 var(--sans);letter-spacing:.05em;
+  text-transform:uppercase;padding:4px 7px;border-radius:4px;background:var(--sunk);color:var(--muted);white-space:nowrap}
+.chip.ok{background:var(--ok-soft);color:var(--ok)}
+.chip.warn{background:var(--warn-soft);color:var(--warn)}
+.chip.crit{background:var(--crit-soft);color:var(--crit)}
+.chip.acc{background:var(--accent-soft);color:var(--accent-ink)}
+.mono{font-family:var(--mono)}
+.dim{color:var(--muted)}
+
+/* ---------- tables ---------- */
+.scroll{overflow-x:auto;overscroll-behavior-x:contain}
+table{border-collapse:separate;border-spacing:0;width:100%;font-size:13px}
+th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--line-soft);white-space:nowrap}
+thead th{position:sticky;top:0;z-index:5;background:var(--surface-2);font:600 10.5px/1.4 var(--sans);
+  letter-spacing:.07em;text-transform:uppercase;color:var(--muted);border-bottom:1px solid var(--line)}
+tbody tr:hover td{background:var(--surface-2)}
+td.num,th.num{text-align:right;font-family:var(--mono);font-size:12.5px}
+tbody tr:last-child td{border-bottom:0}
+
+/* ---------- forecast grid ---------- */
+.gridwrap{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);overflow:hidden;margin-bottom:14px}
+.gridwrap > header{padding:10px 14px;display:flex;align-items:center;gap:10px;cursor:pointer;
+  border-bottom:1px solid var(--line-soft);background:var(--surface)}
+.gridwrap > header:hover{background:var(--surface-2)}
+.gridwrap > header h3{font-size:14.5px;font-weight:600;display:flex;align-items:baseline;gap:7px}
+.gridwrap > header h3 span{font:500 12px/1 var(--mono);color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.caret{width:14px;height:14px;flex:none;stroke:var(--muted);fill:none;stroke-width:2;transition:transform .15s}
+.gridwrap[data-open="true"] .caret{transform:rotate(90deg)}
+.fg{font-size:12.5px}
+.fg th,.fg td{padding:5px 8px;border-bottom:1px solid var(--line-soft);border-right:1px solid var(--line-soft)}
+.fg thead th{background:var(--surface-2);z-index:6}
+.fg .stick{position:sticky;left:0;z-index:4;background:var(--surface);min-width:246px;max-width:246px;
+  border-right:1px solid var(--line);overflow:hidden;text-overflow:ellipsis}
+.fg thead .stick{z-index:8;background:var(--surface-2)}
+.fg tbody tr:hover .stick{background:var(--surface-2)}
+.fg td.v{text-align:right;font-family:var(--mono);font-size:12px;min-width:52px}
+.fg th.wkh{text-align:right;font:600 10px/1.3 var(--mono);letter-spacing:.02em;color:var(--muted);min-width:52px}
+.fg th.wkh b{display:block;font-weight:600;color:var(--ink-2);font-size:11px}
+.fg th.wkh.now{color:var(--accent-ink);background:var(--accent-soft)}
+.fg tr.r-out .stick{color:var(--ink-2)}
+.fg tr.r-soh{font-weight:500}
+.fg tr.sep td{background:var(--sunk);height:5px;padding:0;border-bottom:1px solid var(--line)}
+.fg tr.tot td,.fg tr.tot .stick{background:var(--surface-2);font-weight:600}
+.fg td.past{color:var(--faint)}
+.fg td.neg{background:var(--crit-soft);color:var(--crit);font-weight:600}
+.fg td.low{background:var(--warn-soft);color:var(--warn);font-weight:600}
+.fg td.inp{padding:0}
+.fg td.inp input{width:100%;border:0;background:transparent;text-align:right;padding:5px 8px;
+  font-family:var(--mono);font-size:12px;border-radius:0}
+.fg td.inp input:focus{background:var(--accent-soft);outline:1px solid var(--accent)}
+.fg td.inp.edited input{background:var(--accent-soft);font-weight:600}
+.fg .lbl{display:flex;align-items:center;gap:6px}
+.fg .lbl .tag{font:600 9px/1 var(--sans);letter-spacing:.06em;text-transform:uppercase;padding:3px 4px;border-radius:3px;
+  background:var(--sunk);color:var(--faint);flex:none}
+.fg .lbl .tag.d{background:var(--accent-soft);color:var(--accent-ink)}
+.fg .lbl .tag.c{background:var(--ok-soft);color:var(--ok)}
+.basis{border:0;background:var(--sunk);border-radius:4px;font-size:10.5px;padding:2px 4px;color:var(--muted);
+  max-width:124px;cursor:pointer}
+.basis:hover{color:var(--ink)}
+
+/* ---------- misc ---------- */
+.stripe{border-left:3px solid transparent}
+.stripe.crit{border-left-color:var(--crit)} .stripe.warn{border-left-color:var(--warn)}
+.stripe.ok{border-left-color:var(--ok)}
+.bar{height:6px;border-radius:3px;background:var(--sunk);overflow:hidden;min-width:56px}
+.bar i{display:block;height:100%;border-radius:3px;background:var(--accent)}
+.bar i.warn{background:var(--warn)} .bar i.crit{background:var(--crit)} .bar i.ok{background:var(--ok)}
+dialog{border:1px solid var(--line);border-radius:8px;padding:0;background:var(--surface);color:var(--ink);
+  box-shadow:var(--shadow);max-width:min(680px,94vw);width:100%}
+dialog::backdrop{background:rgba(10,16,18,.5)}
+dialog header{padding:14px 16px;border-bottom:1px solid var(--line-soft);display:flex;align-items:center;gap:10px}
+dialog header h3{font-size:15.5px;font-weight:600}
+dialog .body{padding:16px;display:flex;flex-direction:column;gap:14px;max-height:66vh;overflow-y:auto}
+dialog footer{padding:12px 16px;border-top:1px solid var(--line-soft);display:flex;gap:8px;justify-content:flex-end;background:var(--surface-2)}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.note{background:var(--surface-2);border:1px solid var(--line-soft);border-radius:var(--r);padding:10px 12px;
+  font-size:12.5px;color:var(--muted);line-height:1.55}
+.note b{color:var(--ink-2)}
+.toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:var(--ink);color:var(--ground);
+  padding:9px 15px;border-radius:var(--r);font-size:13px;font-weight:500;z-index:99;box-shadow:var(--shadow)}
+.packtabs{display:flex;gap:2px;background:var(--sunk);border-radius:var(--r);padding:2px}
+.packtabs button{background:none;border:0;padding:4px 9px;border-radius:4px;font-size:12px;font-weight:500;
+  color:var(--muted);cursor:pointer}
+.packtabs button[aria-pressed="true"]{background:var(--surface);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.1)}
+.hint{font-size:11.5px;color:var(--faint)}
+@media (max-width:860px){
+  .app{grid-template-columns:1fr}
+  .rail{position:static;height:auto;flex-direction:row;flex-wrap:wrap;align-items:center;border-right:0;border-bottom:1px solid var(--line)}
+  .brand{border-bottom:0;padding:12px 14px}
+  .nav{flex-direction:row;flex-wrap:wrap;flex:1}
+  .nav button{width:auto}
+  .railfoot{margin:0;border-top:0;flex-direction:row;align-items:center;gap:14px}
+  .pane{padding:14px 12px 60px}
+  .top{padding:12px 14px}
+}
+</style>
+<style>img{max-width:100%}[hidden]{display:none!important}</style>
+</head>
+<body>
+
+
+<div class="app">
+  <aside class="rail">
+    <div class="brand">
+      <div class="mk"><i></i>Coldroom</div>
+      <small>Your Mates Brewing</small>
+    </div>
+    <nav class="nav" id="nav"></nav>
+    <div class="railfoot">
+      <div class="wk">Week commencing<b id="curWeek">—</b></div>
+      <div class="sync" id="sync"><i></i><span>Connecting…</span></div>
+    </div>
+  </aside>
+  <div class="main">
+    <div class="top">
+      <div>
+        <h1 id="ttl">Forecast</h1>
+        <div class="sub" id="sub">Loading…</div>
+      </div>
+      <div class="spacer"></div>
+      <div id="topctl" class="row"></div>
+    </div>
+    <div class="pane" id="pane"></div>
+  </div>
+</div>
+<dialog id="dlg"><form method="dialog" id="dlgform"></form></dialog>
+<script>
+"use strict";
+/* ============================ helpers ============================ */
+const $ = (s,r)=> (r||document).querySelector(s);
+const el = (t,a,...k)=>{const n=document.createElement(t);
+  if(a) for(const [p,v] of Object.entries(a)){
+    if(v==null||v===false) continue;
+    if(p==="class") n.className=v; else if(p==="html") n.innerHTML=v;
+    else if(p==="text") n.textContent=v; else if(p.startsWith("on")) n.addEventListener(p.slice(2),v);
+    else n.setAttribute(p,v===true?"":v);
+  }
+  for(const c of k.flat()) if(c!=null&&c!==false) n.append(c.nodeType?c:document.createTextNode(c));
+  return n;};
+const clear=n=>{while(n.firstChild)n.removeChild(n.firstChild);return n;};
+const uid=p=>(p||"id")+"-"+Math.random().toString(36).slice(2,9);
+const slug=s=>(String(s).replace(/[^A-Za-z0-9]+/g,"-").replace(/^-|-$/g,"").toLowerCase()||"x");
+
+const DAY=864e5;
+const iso=d=>{const x=new Date(d);return new Date(Date.UTC(x.getUTCFullYear(),x.getUTCMonth(),x.getUTCDate())).toISOString().slice(0,10);};
+const D=s=>new Date(s+"T00:00:00Z");
+const monday=d=>{const x=D(iso(d));const g=(x.getUTCDay()+6)%7;x.setUTCDate(x.getUTCDate()-g);return iso(x);};
+const wkAdd=(w,n)=>{const x=D(w);x.setUTCDate(x.getUTCDate()+7*n);return iso(x);};
+const wkDiff=(a,b)=>Math.round((D(b)-D(a))/(7*DAY));
+const dDiff=(a,b)=>Math.round((D(b)-D(a))/DAY);
+const MON=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const fmtW=w=>{const x=D(w);return x.getUTCDate()+" "+MON[x.getUTCMonth()];};
+const fmtWY=w=>{const x=D(w);return x.getUTCDate()+" "+MON[x.getUTCMonth()]+" "+String(x.getUTCFullYear()).slice(2);};
+const fmtD=s=>s?fmtWY(s):"—";
+const n0=v=>v==null||!isFinite(v)?"":Math.round(v).toLocaleString();
+const n1=v=>v==null||!isFinite(v)?"":(Math.round(v*10)/10).toLocaleString();
+const num=v=>{const x=parseFloat(String(v??"").replace(/,/g,""));return isFinite(x)?x:null;};
+const sum=a=>a.reduce((x,y)=>x+(y||0),0);
+const addMonths=(s,m)=>{const x=D(s);const d=x.getUTCDate();x.setUTCDate(1);x.setUTCMonth(x.getUTCMonth()+m);
+  x.setUTCDate(Math.min(d,new Date(Date.UTC(x.getUTCFullYear(),x.getUTCMonth()+1,0)).getUTCDate()));return iso(x);};
+
+const PACKS=["Can","10 Pack","Keg","30L Keg"];
+const PACK_UNIT={"Can":"Cartons","10 Pack":"Cartons","Keg":"50L Kegs","30L Keg":"30L Kegs"};
+const PACK_SHELF={"Can":12,"10 Pack":12,"Keg":6,"30L Keg":6};
+const BASES={prior_year:"Prior year",recent_avg:"Recent average",manual:"Manual entry",planned:"Distributor plan"};
+const LOCTYPE={distributor:"Distributor",retail:"Retail chain",direct:"Direct channel",internal:"Internal"};
+
+/* ============================ state ============================ */
+const S={
+  ready:false, backend:null, mode:"loading",
+  config:{currentWeek:monday(new Date()),horizon:26,past:6,avgWindow:8,
+          defaultDrawBasis:"prior_year",defaultShipMethod:"target_soh",coverWarnWeeks:2},
+  products:[], locations:[], hist:{}, plan:{}, stock:[], runs:[],
+  view:"forecast", open:{}, packTab:"all", prodTab:"all", dirty:new Set(), calcCache:null
+};
+const P=id=>S.products.find(p=>p.id===id);
+const L=id=>S.locations.find(l=>l.id===id);
+const skuId=(pid,pack)=>pid+"__"+slug(pack);
+function skus(){const out=[];for(const p of S.products.slice().sort((a,b)=>(a.sort|0)-(b.sort|0)))
+  for(const q of (p.packs||[])) if(q.active!==false) out.push({id:skuId(p.id,q.code),product:p,pack:q.code,packDef:q});
+  return out;}
+const activeLocs=()=>S.locations.filter(l=>l.active!==false&&l.type!=="internal").sort((a,b)=>(a.sort|0)-(b.sort|0));
+const planOf=s=>S.plan[s]||(S.plan[s]={id:s,basis:{},method:{},manual:{},planned:{},targetUnits:{},targetWeeks:{},off:{}});
+
+/* ============================ storage ============================ */
+const LS="coldroom-v1";
+function localSave(){try{localStorage.setItem(LS,JSON.stringify({config:S.config,products:S.products,
+  locations:S.locations,plan:S.plan,stock:S.stock,runs:S.runs}));}catch(e){}}
+function localLoad(){try{const r=JSON.parse(localStorage.getItem(LS)||"null");if(!r)return false;
+  Object.assign(S.config,r.config||{});S.products=r.products||[];S.locations=r.locations||[];
+  S.plan=r.plan||{};S.stock=r.stock||[];S.runs=r.runs||[];return S.products.length>0;}catch(e){return false;}}
+
+let saveTimer=null;
+function persist(kind,doc){
+  S.calcCache=null;
+  if(S.backend){
+    Promise.resolve(S.backend.set(kind,JSON.parse(JSON.stringify(doc))))
+      .catch(e=>flash(e&&e.auth?"Your passphrase was rejected — reload to sign in again"
+                                :"Couldn't save to the server — kept on this device for now"));
+  }
+  clearTimeout(saveTimer);saveTimer=setTimeout(localSave,400);
+}
+function remove(kind,id){
+  S.calcCache=null;
+  if(S.backend) Promise.resolve(S.backend.del(kind,id)).catch(()=>{});
+  clearTimeout(saveTimer);saveTimer=setTimeout(localSave,400);
+}
+function setSync(cls,txt){const s=$("#sync");s.className="sync "+cls;s.lastChild.textContent=txt;}
+let toastT=null;
+function flash(msg){let t=$(".toast");if(!t){t=el("div",{class:"toast"});document.body.append(t);}
+  t.textContent=msg;clearTimeout(toastT);toastT=setTimeout(()=>t.remove(),2600);}
+
+async function loadAll(){
+  const b=S.backend; if(!b) return;
+  const [cfg,pr,lo,hi,pl,st,ru]=await Promise.all(
+    KINDS.map(n=>b.list(n).catch(()=>[])));
+  if(cfg&&cfg[0]) Object.assign(S.config,cfg[0]);
+  if(pr&&pr.length) S.products=pr;
+  if(lo&&lo.length) S.locations=lo;
+  if(hi&&hi.length) hi.forEach(h=>S.hist[h.id||h.sku]=h);
+  if(pl&&pl.length) pl.forEach(p=>S.plan[p.id]=p);
+  if(st&&st.length) S.stock=st;
+  if(ru&&ru.length) S.runs=ru;
+  S.products.sort((a,b2)=>(a.sort|0)-(b2.sort|0));
+  S.locations.sort((a,b2)=>(a.sort|0)-(b2.sort|0));
+  S.stock.sort((a,b2)=>a.weekStart<b2.weekStart?1:-1);
+  b.watch("stocktakes",rows=>{
+    if(rows.length&&S.ready){S.stock=rows.sort((a,b2)=>a.weekStart<b2.weekStart?1:-1);
+      S.calcCache=null; if(S.view==="stocktake"||S.view==="ageing")render();}
+  });
+}
+
+async function boot(){
+  localLoad();
+  let b=null;
+  try{ b=await openBackend(); }catch(e){}
+  S.backend=b;
+  if(b&&b.needsKey){ setSync("off","Locked"); keyScreen(); return; }
+  if(b){
+    setSync("on",b.label);
+    try{ await loadAll(); }
+    catch(e){ setSync("off","Offline — changes are saved on this device"); }
+  } else {
+    S.mode="local"; setSync("off","This device only");
+  }
+  if(b&&b.kind==="rest"&&!S.products.length){ setupScreen(); return; }
+  if(!S.products.length) seedBlank();
+  S.ready=true;
+  const lastSt=S.stock[0];
+  if(lastSt&&wkDiff(S.config.currentWeek,lastSt.weekStart)>0) S.config.currentWeek=lastSt.weekStart;
+  render();
+}
+function seedBlank(){
+  S.locations=[{id:"coldroom",name:"Coldroom",type:"internal",method:"none",active:true,sort:99}];
+  S.products=[];
+}
+
+/* ============================ history access ============================ */
+function H(sku){
+  let h=S.hist[sku];
+  if(!h){h={id:sku,sku,weeks:[],out:{},soh:{},used:{},stockIn:{}};S.hist[sku]=h;}
+  if(!h._ix){h._ix={};(h.weeks||[]).forEach((w,i)=>h._ix[w]=i);}
+  return h;
+}
+function series(sku,field,loc){const h=H(sku);return (h[field]&&h[field][loc])||null;}
+function at(sku,field,loc,wk){const h=H(sku);const i=h._ix[wk];if(i==null)return null;
+  const a=h[field]&&h[field][loc];return a?(a[i]==null?null:a[i]):null;}
+/* last n actual values ending at (and including) week w */
+function tail(sku,field,loc,w,n){
+  const h=H(sku),out=[];let cur=w;
+  for(let k=0;k<n*3&&out.length<n;k++){const i=h._ix[cur];
+    if(i!=null){const a=h[field]&&h[field][loc];const v=a?a[i]:null;if(v!=null)out.push(v);}
+    cur=wkAdd(cur,-1); if(h.weeks.length&&cur<h.weeks[0]) break;}
+  return out;
+}
+function avgOf(sku,field,loc,w,n){const t=tail(sku,field,loc,w,n);return t.length?sum(t)/t.length:0;}
+
+/* opening stock on hand for a sku at a location, from the latest stocktake */
+function openingSOH(sku,locId){
+  const st=S.stock.find(s=>s.weekStart<=S.config.currentWeek)||S.stock[0];
+  if(st&&st.entries){
+    const rows=st.entries.filter(e=>skuId(e.productId,e.pack)===sku&&e.locationId===locId);
+    if(rows.length) return sum(rows.map(r=>r.qty));
+    /* counted zero only if this SKU was actually counted somewhere in this stocktake
+       and this location was counted too — otherwise fall back to the last known SOH */
+    const skuCounted=st.entries.some(e=>skuId(e.productId,e.pack)===sku);
+    const locCounted=st.entries.some(e=>e.locationId===locId);
+    if(skuCounted&&locCounted) return 0;
+  }
+  const v=at(sku,"soh",histLoc(sku,"soh",locId),S.config.currentWeek);
+  return v==null?0:v;
+}
+/* history is keyed by location NAME (as imported); accept either */
+function histLoc(sku,field,locId){
+  const h=H(sku),l=L(locId);
+  if(h[field]&&h[field][locId])return locId;
+  if(l&&h[field]&&h[field][l.name])return l.name;
+  return l?l.name:locId;
+}
+</script>
+<script>
+"use strict";
+/* ============================ storage backends ============================ */
+/* The same page runs in two places: published on claude.ai, where the Claude
+   runtime supplies a shared database, and on Netlify, where a small function
+   over Netlify Blobs does the same job. Both expose list/set/del. */
+
+const KINDS=["config","products","locations","history","plan","stocktakes","runs"];
+const KEYSTORE="coldroom-key";
+
+function artifactBackend(db){
+  const unwrap=sn=>((sn&&sn.docs)||[]).map(d=>Object.assign({id:d.id},d.data?d.data():d));
+  return {
+    kind:"artifact", label:"Shared with your team",
+    list:async n=>unwrap(await db.collection(n).get()),
+    set:async (n,doc)=>db.doc(n+"/"+doc.id).set(JSON.parse(JSON.stringify(doc))),
+    del:async (n,id)=>db.doc(n+"/"+id).delete(),
+    watch:(n,fn)=>{try{db.collection(n).onSnapshot(sn=>fn(unwrap(sn)),()=>{});}catch(e){}}
+  };
+}
+
+function restBackend(){
+  let key=null;
+  try{ key=localStorage.getItem(KEYSTORE); }catch(e){}
+  const head=()=>{const h={"content-type":"application/json"};
+    if(key) h["x-coldroom-key"]=key; return h;};
+  async function call(path,opts){
+    const r=await fetch("/api/db/"+path,Object.assign({headers:head()},opts||{}));
+    if(r.status===401){ const e=new Error("passphrase"); e.auth=true; throw e; }
+    if(!r.ok) throw new Error("Server said "+r.status);
+    return r.json();
+  }
+  return {
+    kind:"rest", label:"Shared · Netlify",
+    setKey(k){ key=k; try{localStorage.setItem(KEYSTORE,k);}catch(e){} },
+    clearKey(){ key=null; try{localStorage.removeItem(KEYSTORE);}catch(e){} },
+    list:n=>call(n),
+    set:(n,doc)=>call(n+"/"+encodeURIComponent(doc.id),{method:"PUT",body:JSON.stringify(doc)}),
+    del:(n,id)=>call(n+"/"+encodeURIComponent(id),{method:"DELETE"}),
+    /* no live push over plain HTTP — poll instead, and never while someone is typing */
+    watch:(n,fn)=>setInterval(async()=>{
+      const a=document.activeElement;
+      if(a&&(a.tagName==="INPUT"||a.tagName==="SELECT"||a.tagName==="TEXTAREA")) return;
+      if(document.hidden) return;
+      try{ fn(await call(n)); }catch(e){}
+    },45000)
+  };
+}
+
+async function openBackend(){
+  if(typeof claude!=="undefined"&&claude&&typeof claude.use==="function"){
+    try{ const db=await claude.use("db"); if(db) return artifactBackend(db); }catch(e){}
+  }
+  const b=restBackend();
+  try{ await b.list("config"); return b; }
+  catch(e){ if(e&&e.auth){ b.needsKey=true; return b; } }
+  return null;
+}
+
+/* ---- first-run import of the starting data shipped with the site ---- */
+async function importSeed(onProgress){
+  const r=await fetch("seed.json",{cache:"no-store"});
+  if(!r.ok) throw new Error("Couldn't read seed.json ("+r.status+")");
+  const seed=await r.json();
+  let done=0;
+  const all=[];
+  for(const kind of KINDS) for(const doc of (seed[kind]||[])) all.push([kind,doc]);
+  for(const [kind,doc] of all){
+    await S.backend.set(kind,doc);
+    done++; if(onProgress) onProgress(done,all.length);
+  }
+  return all.length;
+}
+
+function setupScreen(){
+  const pane=clear($("#pane")); clear($("#topctl"));
+  $("#ttl").textContent="Set up Coldroom";
+  $("#sub").textContent="This site has no stock data in it yet";
+  const c=el("div",{class:"card",style:"max-width:620px"});
+  c.append(el("header",{},el("h3",{},"Load the starting data")));
+  const b=el("div",{class:"body"});
+  b.append(el("div",{class:"note"},el("b",{},"Nothing has been stored here yet. "),
+    "Loading brings across your products, distributors and channels, two years of weekly history, ",
+    "the plan settings and every stocktake up to w/c 28 September — the same figures that were in the ",
+    "Stock Management Sheet. You only need to do this once."));
+  const status=el("div",{class:"hint"},"");
+  const go=el("button",{class:"btn pri",onclick:async()=>{
+    go.disabled=true; status.textContent="Loading…";
+    try{
+      const n=await importSeed((d,t)=>{status.textContent="Loading "+d+" of "+t+"…";});
+      status.textContent="Loaded "+n+" records. Starting up…";
+      S.hist={}; S.plan={}; S.products=[]; S.locations=[]; S.stock=[]; S.runs=[];
+      await loadAll(); S.ready=true; S.calcCache=null; render();
+    }catch(e){ go.disabled=false; status.textContent="That didn't work: "+e.message; }
+  }},"Load starting data");
+  b.append(el("div",{class:"row"},go,status));
+  c.append(b); pane.append(c);
+}
+
+function keyScreen(){
+  const pane=clear($("#pane")); clear($("#topctl"));
+  $("#ttl").textContent="Coldroom";
+  $("#sub").textContent="Enter the team passphrase to see the stock figures";
+  const c=el("div",{class:"card",style:"max-width:480px"});
+  c.append(el("header",{},el("h3",{},"Team passphrase")));
+  const b=el("div",{class:"body"});
+  const inp=el("input",{type:"password",id:"ckey",placeholder:"passphrase",
+    onkeydown:e=>{if(e.key==="Enter")try_();}});
+  const msg=el("div",{class:"hint"},"");
+  async function try_(){
+    const v=inp.value.trim(); if(!v) return;
+    S.backend.setKey(v); msg.textContent="Checking…";
+    try{ await S.backend.list("config"); location.reload(); }
+    catch(e){ S.backend.clearKey(); msg.textContent="That passphrase wasn't accepted."; }
+  }
+  b.append(field("Passphrase",inp,"Shared with whoever needs the stock figures"));
+  b.append(el("div",{class:"row"},el("button",{class:"btn pri",onclick:try_},"Open Coldroom"),msg));
+  c.append(b); pane.append(c);
+  setTimeout(()=>inp.focus(),30);
+}
+</script>
+<script>
+"use strict";
+/* ============================ forecast engine ============================ */
+function roundTo(v,m){ if(!m||m<=1) return Math.max(0,Math.round(v)); return Math.max(0,Math.ceil(v/m)*m); }
+
+function forecastSeries(sku,field,locKey,weeks,basis,manualMap,avgWin){
+  const cw=S.config.currentWeek, out=[];
+  const avg=avgOf(sku,field,locKey,cw,avgWin);
+  for(const w of weeks){
+    let v=0;
+    if(basis==="manual"){ v=manualMap&&manualMap[w]!=null?manualMap[w]:null;
+      if(v==null){ const py=at(sku,field,locKey,wkAdd(w,-52)); v=py!=null?py:avg; } }
+    else if(basis==="recent_avg"){ v=avg; }
+    else { const py=at(sku,field,locKey,wkAdd(w,-52)); v=py!=null?py:avg; }
+    out.push(Math.max(0,v||0));
+  }
+  return out;
+}
+
+function skuHasActivity(sku,locId){
+  const cw=S.config.currentWeek, l=L(locId);
+  if(!l) return false;
+  for(const f of ["out","used","soh"]){
+    const k=histLoc(sku,f,locId);
+    if(tail(sku,f,k,cw,10).some(v=>v>0)) return true;
+    if(tail(sku,f,k,wkAdd(cw,-40),14).some(v=>v>0)) return true;
+  }
+  const pl=planOf(sku);
+  if(pl.planned[locId]&&Object.values(pl.planned[locId]).some(v=>v>0)) return true;
+  if(pl.manual[locId]&&Object.values(pl.manual[locId]).some(v=>v>0)) return true;
+  if(openingSOH(sku,locId)>0) return true;
+  return false;
+}
+
+function beerInFor(sku,weeks){
+  const map={};
+  for(const r of S.runs){
+    if(skuId(r.productId,r.pack)!==sku) continue;
+    if(r.status==="cancelled") continue;
+    const w=monday(r.packDate);
+    map[w]=(map[w]||0)+(num(r.units)||0);
+  }
+  return weeks.map(w=>map[w]||0);
+}
+
+function compute(sku){
+  const cfg=S.config, cw=cfg.currentWeek;
+  const weeks=[]; for(let i=1;i<=cfg.horizon;i++) weeks.push(wkAdd(cw,i));
+  const past=[]; for(let i=cfg.past;i>=0;i--) past.push(wkAdd(cw,-i));
+  const pl=planOf(sku);
+  const rows=[];
+  for(const l of activeLocs()){
+    if(pl.off&&pl.off[l.id]) continue;
+    if(!skuHasActivity(sku,l.id)) continue;
+    const tracks=(l.type==="distributor"||l.type==="retail");
+    const kUsed=histLoc(sku,"used",l.id), kOut=histLoc(sku,"out",l.id), kSoh=histLoc(sku,"soh",l.id);
+    const basis=(pl.basis&&pl.basis[l.id])||cfg.defaultDrawBasis;
+    const method=(pl.method&&pl.method[l.id])||(tracks?(l.method||cfg.defaultShipMethod):"direct");
+    const manual=(pl.manual&&pl.manual[l.id])||{};
+    const planned=(pl.planned&&pl.planned[l.id])||{};
+
+    if(!tracks){
+      const ship=forecastSeries(sku,"out",kOut,weeks,basis,manual,cfg.avgWindow);
+      rows.push({loc:l,tracks:false,basis,method:"direct",ship,draw:null,soh:null,
+        pastOut:past.map(w=>at(sku,"out",kOut,w)),
+        avg:avgOf(sku,"out",kOut,cw,cfg.avgWindow)});
+      continue;
+    }
+    /* distributor / retail: their drawdown drives their SOH, we replenish */
+    let drawKey=kUsed, drawField="used";
+    if(!tail(sku,"used",kUsed,cw,12).length){ drawKey=kOut; drawField="out"; }
+    const draw=forecastSeries(sku,drawField,drawKey,weeks,basis,manual,cfg.avgWindow);
+    const avgDraw=Math.max(0,avgOf(sku,drawField,drawKey,cw,cfg.avgWindow)||sum(draw)/Math.max(1,draw.length));
+    const tW=(pl.targetWeeks&&pl.targetWeeks[l.id])!=null?pl.targetWeeks[l.id]:(l.targetWeeks||3);
+    const tU=(pl.targetUnits&&pl.targetUnits[l.id]);
+    const target=Math.max(0,(tU!=null&&tU!==""&&num(tU)>0)?num(tU):Math.round(avgDraw*tW));
+    const lead=Math.max(0,l.leadTimeWeeks||0);
+    const mult=l.orderMultiple||1;
+    /* what we ship in week k lands on their shelf `lead` weeks later */
+    let soh=openingSOH(sku,l.id);
+    const sohArr=[],shipArr=[];
+    for(let k=0;k<weeks.length;k++){
+      const arriving = k>=lead ? shipArr[k-lead]
+        : (at(sku,"out",kOut,wkAdd(cw,1+k-lead))||0);
+      soh = soh + arriving - draw[k];
+      let ship=0;
+      if(method==="planned"){ ship=num(planned[weeks[k]])||0; }
+      else {
+        /* project forward over the lead time, counting what's already in transit */
+        let p=soh;
+        for(let j=1;j<=lead;j++){
+          const inflight = (k+j-lead)>=0 ? (shipArr[k+j-lead]||0)
+            : (at(sku,"out",kOut,wkAdd(cw,1+k+j-lead))||0);
+          p = p + inflight - (draw[k+j]!=null?draw[k+j]:avgDraw);
+        }
+        if(p<target) ship=roundTo(target-p,mult);
+      }
+      sohArr.push(soh); shipArr.push(ship);
+    }
+    rows.push({loc:l,tracks:true,basis,method,draw,ship:shipArr,soh:sohArr,target,avg:avgDraw,
+      opening:openingSOH(sku,l.id),
+      pastOut:past.map(w=>at(sku,"out",kOut,w)),
+      pastDraw:past.map(w=>at(sku,drawField,drawKey,w)),
+      pastSoh:past.map(w=>at(sku,"soh",kSoh,w))});
+  }
+  const totalShip=weeks.map((_,k)=>sum(rows.map(r=>r.ship[k]||0)));
+  const beerIn=beerInFor(sku,weeks);
+  const openCold=openingSOH(sku,"coldroom");
+  const cold=[]; let c=openCold;
+  for(let k=0;k<weeks.length;k++){ c=c+beerIn[k]-totalShip[k]; cold.push(c); }
+  const wkAvg=sum(totalShip)/Math.max(1,totalShip.length);
+  const cover=cold.map(v=>wkAvg>0?v/wkAvg:null);
+  let stockoutWeek=null;
+  for(let k=0;k<weeks.length;k++) if(cold[k]<0){stockoutWeek=weeks[k];break;}
+  const p=P(sku.split("__")[0]);
+  const lead=(p&&p.brewToPackDays)||21;
+  const brewBy=stockoutWeek?iso(new Date(D(stockoutWeek)-lead*DAY)):null;
+  const surplusTarget=(p&&p.surplusTarget&&p.surplusTarget[sku.split("__").slice(1).join("__")])||null;
+  return {sku,weeks,past,rows,totalShip,beerIn,cold,cover,openCold,stockoutWeek,brewBy,wkAvg,surplusTarget,
+    pastTotalOut:past.map(w=>sum(activeLocs().map(l=>at(sku,"out",histLoc(sku,"out",l.id),w)||0))),
+    pastCold:past.map(w=>at(sku,"soh","coldroom",w)),
+    pastIn:past.map(w=>at(sku,"stockIn","packaged",w))};
+}
+function computeAll(){
+  if(S.calcCache) return S.calcCache;
+  const m={}; for(const s of skus()){ if(s.product.forecast===false&&!S.open[s.id]) continue; m[s.id]=compute(s.id); }
+  S.calcCache=m; return m;
+}
+
+/* ============================ batch ageing ============================ */
+function latestStocktake(){ return S.stock.find(s=>s.weekStart<=S.config.currentWeek)||S.stock[0]||null; }
+function shelfMonths(productId,pack){
+  const p=P(productId); const q=p&&(p.packs||[]).find(x=>x.code===pack);
+  return (q&&q.shelfLifeMonths)||PACK_SHELF[pack]||12;
+}
+function ageRows(){
+  const st=latestStocktake(); if(!st) return [];
+  const today=S.config.currentWeek;
+  return (st.entries||[]).filter(e=>e.qty>0).map(e=>{
+    const sm=shelfMonths(e.productId,e.pack);
+    const bb=e.bestBefore||null;
+    const packDate=e.packDate||(bb?addMonths(bb,-sm):null);
+    const sendByD=bb?iso(new Date(D(bb)-Math.round(sm/2*30.44)*DAY)):null;
+    const dBB=bb?dDiff(today,bb):null;
+    const dSB=sendByD?dDiff(today,sendByD):null;
+    const pctLeft=(bb&&packDate)?Math.max(0,Math.min(1,dDiff(today,bb)/Math.max(1,dDiff(packDate,bb)))):null;
+    let status="ok";
+    if(dBB!=null&&dBB<=0) status="expired";
+    else if(dSB!=null&&dSB<=0) status="pastsend";
+    else if(dSB!=null&&dSB<=28) status="soon";
+    return {...e,shelfMonths:sm,packDate,bestBefore:bb,sendBy:sendByD,daysToBB:dBB,daysToSend:dSB,
+      pctLeft,status,weekStart:st.weekStart};
+  }).sort((a,b)=>(a.daysToSend==null?1e9:a.daysToSend)-(b.daysToSend==null?1e9:b.daysToSend));
+}
+
+/* ============================ headline numbers ============================ */
+function alerts(){
+  const all=computeAll(), out=[];
+  for(const s of skus()){
+    if(s.product.forecast===false) continue;
+    const c=all[s.id]; if(!c) continue;
+    if(c.stockoutWeek){
+      const wks=wkDiff(S.config.currentWeek,c.stockoutWeek);
+      out.push({sku:s.id,name:s.product.name+" "+s.pack,week:c.stockoutWeek,weeks:wks,brewBy:c.brewBy,
+        sev:wks<=4?"crit":wks<=10?"warn":"ok"});
+    }
+  }
+  return out.sort((a,b)=>a.weeks-b.weeks);
+}
+</script>
+<script>
+"use strict";
+/* ============================ nav / router ============================ */
+const ICONS={
+ forecast:'<path d="M3 3v18h18"/><path d="M7 14l4-5 3 3 5-7"/>',
+ stocktake:'<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M9 8h6M9 12h6M9 16h3"/>',
+ production:'<path d="M4 20V9l5 3V9l5 3V4l6 3v13z"/>',
+ ageing:'<circle cx="12" cy="12" r="8"/><path d="M12 7v5l3 2"/>',
+ setup:'<path d="M4 6h16M4 12h16M4 18h16"/><circle cx="9" cy="6" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="8" cy="18" r="2"/>'};
+const VIEWS=[
+ {id:"forecast",label:"Forecast",title:"Forecast",sub:"Projected stock on hand across the coldroom, distributors and channels"},
+ {id:"stocktake",label:"Stocktake",title:"Weekly stocktake",sub:"Batch-level counts by location — the numbers everything else runs on"},
+ {id:"production",label:"Production",title:"Production schedule",sub:"Planned packaging runs and the brew dates they imply"},
+ {id:"ageing",label:"Aged stock",title:"Aged stock",sub:"Best before, send-by cut-offs and what needs moving"},
+ {id:"setup",label:"Setup",title:"Setup",sub:"Products, packs, distributors and customer channels"}];
+
+function drawNav(){
+  const n=clear($("#nav")), a=alertsSafe();
+  const crit=a.filter(x=>x.sev==="crit").length;
+  const aged=S.ready?ageRows().filter(r=>r.status==="expired"||r.status==="pastsend").length:0;
+  for(const v of VIEWS){
+    const b=el("button",{"aria-current":String(S.view===v.id),onclick:()=>go(v.id)},
+      el("span",{html:'<svg viewBox="0 0 24 24">'+ICONS[v.id]+'</svg>'}).firstChild, v.label);
+    if(v.id==="forecast"&&crit) b.append(el("span",{class:"ct"},String(crit)));
+    if(v.id==="ageing"&&aged) b.append(el("span",{class:"ct"},String(aged)));
+    n.append(b);
+  }
+}
+function alertsSafe(){ try{ return S.ready?alerts():[]; }catch(e){ return []; } }
+function go(v){ S.view=v; render(); window.scrollTo(0,0); }
+
+function render(){
+  const v=VIEWS.find(x=>x.id===S.view)||VIEWS[0];
+  $("#ttl").textContent=v.title;
+  $("#sub").textContent=v.sub;
+  $("#curWeek").textContent=fmtWY(S.config.currentWeek);
+  drawNav();
+  const pane=clear($("#pane")), ctl=clear($("#topctl"));
+  try{
+    ({forecast:viewForecast,stocktake:viewStocktake,production:viewProduction,
+      ageing:viewAgeing,setup:viewSetup}[S.view])(pane,ctl,v);
+  }catch(e){
+    console.error(e);
+    pane.append(el("div",{class:"card"},el("div",{class:"empty"},
+      el("b",{},"Something went wrong drawing this screen"),String(e&&e.message||e))));
+  }
+}
+
+/* ============================ shared bits ============================ */
+function packFilterCtl(ctl,key){
+  const packs=["all",...PACKS.filter(p=>skus().some(s=>s.pack===p))];
+  const seg=el("div",{class:"packtabs"});
+  for(const p of packs) seg.append(el("button",{"aria-pressed":String(S[key]===p),
+    onclick:()=>{S[key]=p;render();}}, p==="all"?"All packs":p));
+  ctl.append(seg);
+}
+function tile(k,v,note,cls){return el("div",{class:"tile "+(cls||"")},el("div",{class:"k"},k),
+  el("div",{class:"v"},v),note?el("div",{class:"n"},note):null);}
+
+function openDialog(title,buildBody,onSave,saveLabel){
+  const dlg=$("#dlg"), f=clear($("#dlgform"));
+  f.append(el("header",{},el("h3",{},title)));
+  const body=el("div",{class:"body"}); buildBody(body); f.append(body);
+  const foot=el("footer",{});
+  foot.append(el("button",{class:"btn",type:"button",onclick:()=>dlg.close()},"Cancel"));
+  if(onSave) foot.append(el("button",{class:"btn pri",type:"button",onclick:()=>{
+    if(onSave(body)!==false){dlg.close();render();}}},saveLabel||"Save"));
+  f.append(foot); dlg.showModal();
+}
+function field(label,input,hint){return el("label",{class:"fld"},label,input,hint?el("span",{class:"hint"},hint):null);}
+function sel(opts,value,attrs){const s=el("select",attrs||{});
+  for(const [v,t] of opts) s.append(el("option",{value:v,selected:String(v)===String(value)},t));return s;}
+
+/* ============================ 1. FORECAST ============================ */
+function viewForecast(pane,ctl){
+  const all=computeAll(), a=alertsSafe();
+  ctl.append(el("span",{class:"hint"},"Horizon"));
+  ctl.append(sel([[13,"13 weeks"],[26,"26 weeks"],[52,"52 weeks"]],S.config.horizon,
+    {onchange:e=>{S.config.horizon=+e.target.value;S.calcCache=null;saveConfig();render();}}));
+  packFilterCtl(ctl,"packTab");
+  ctl.append(el("button",{class:"btn",onclick:()=>{
+    const open=Object.values(S.open).some(Boolean);
+    S.open={}; if(!open) for(const s of visibleSkus()) S.open[s.id]=true; render();
+  }},"Expand / collapse"));
+
+  const crit=a.filter(x=>x.sev==="crit"), warn=a.filter(x=>x.sev==="warn");
+  const t=el("div",{class:"tiles"});
+  t.append(tile("Coldroom SKUs",String(skus().length),skus().filter(s=>s.product.forecast!==false).length+" forecast"));
+  t.append(tile("Run dry ≤ 4 weeks",String(crit.length),crit.length?crit.slice(0,2).map(x=>x.name).join(", "):"Nothing urgent",crit.length?"alert":"good"));
+  t.append(tile("Run dry ≤ 10 weeks",String(warn.length),"Plan packaging now",warn.length?"warn":""));
+  const nextRun=S.runs.filter(r=>r.packDate>=S.config.currentWeek&&r.status!=="cancelled")
+    .sort((x,y)=>x.packDate<y.packDate?-1:1)[0];
+  t.append(tile("Next packaging run",nextRun?fmtD(nextRun.packDate):"—",
+    nextRun?(P(nextRun.productId)||{}).name+" "+nextRun.pack:"Nothing scheduled"));
+  const st=latestStocktake();
+  t.append(tile("Last stocktake",st?fmtD(st.weekStart):"—",st?(st.entries||[]).length+" batch lines":"Add one to start"));
+  pane.append(t);
+
+  if(a.length){
+    const c=el("div",{class:"card"});
+    c.append(el("header",{},el("h3",{},"Projected stock-outs"),el("span",{class:"hint"},
+      "Week the coldroom goes negative if nothing more is packaged")));
+    const w=el("div",{class:"scroll"}), tb=el("table");
+    tb.append(el("thead",{},el("tr",{},el("th",{},"SKU"),el("th",{},"Runs out"),el("th",{class:"num"},"Weeks away"),
+      el("th",{},"Brew by"),el("th",{},""))));
+    const body=el("tbody");
+    for(const x of a.slice(0,12)){
+      body.append(el("tr",{class:"stripe "+x.sev},
+        el("td",{},el("b",{},x.name)),
+        el("td",{class:"mono"},fmtD(x.week)),
+        el("td",{class:"num"},String(x.weeks)),
+        el("td",{class:"mono"},fmtD(x.brewBy)),
+        el("td",{},el("button",{class:"btn sm",onclick:()=>{S.open[x.sku]=true;render();
+          setTimeout(()=>{const n=document.getElementById("sku-"+x.sku);if(n)n.scrollIntoView({block:"center"});},20);
+        }},"Open"),el("button",{class:"btn sm",style:"margin-left:6px",
+          onclick:()=>newRun(x.sku,x.brewBy)},"Schedule run"))));
+    }
+    tb.append(body); w.append(tb); c.append(w); pane.append(c);
+  }
+
+  const vis=visibleSkus();
+  if(!vis.length) pane.append(el("div",{class:"card"},el("div",{class:"empty"},
+    el("b",{},"No products yet"),"Add products and packs in Setup, then enter a stocktake.")));
+  for(const s of vis){ const c=all[s.id]||compute(s.id); pane.append(skuGrid(s,c)); }
+}
+function visibleSkus(){ return skus().filter(s=>S.packTab==="all"||s.pack===S.packTab)
+  .filter(s=>s.product.forecast!==false||S.open[s.id]); }
+
+function skuGrid(s,c){
+  const wrap=el("div",{class:"gridwrap",id:"sku-"+s.id,"data-open":String(!!S.open[s.id])});
+  const sev=c.stockoutWeek?(wkDiff(S.config.currentWeek,c.stockoutWeek)<=4?"crit":"warn"):"ok";
+  const head=el("header",{onclick:()=>{S.open[s.id]=!S.open[s.id];render();}},
+    el("span",{html:'<svg class="caret" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>'}).firstChild,
+    el("h3",{},s.product.name,el("span",{},s.pack)),
+    el("span",{class:"chip "+(sev==="crit"?"crit":sev==="warn"?"warn":"ok")},
+      c.stockoutWeek?("Runs out "+fmtD(c.stockoutWeek)):"Covered "+S.config.horizon+" wks"),
+    el("span",{class:"chip"},"Coldroom "+n0(c.openCold)+" "+(PACK_UNIT[s.pack]||"").toLowerCase()),
+    el("span",{class:"chip"},(c.cover[0]!=null?n1(c.cover[0]):"—")+" wks cover"),
+    el("span",{class:"spacer",style:"flex:1"}),
+    el("span",{class:"hint"},n0(c.wkAvg)+"/wk out"));
+  wrap.append(head);
+  if(!S.open[s.id]) return wrap;
+
+  const axis=[...c.past,...c.weeks], cwIdx=c.past.length-1;
+  const scroll=el("div",{class:"scroll"}), t=el("table",{class:"fg"});
+  const thead=el("thead"), hr=el("tr",{});
+  hr.append(el("th",{class:"stick"},"Week commencing"));
+  axis.forEach((w,i)=>{const th=el("th",{class:"wkh"+(i===cwIdx?" now":"")},
+    el("b",{},fmtW(w)),String(D(w).getUTCFullYear()).slice(2));th.title=w;hr.append(th);});
+  thead.append(hr); t.append(thead);
+  const tb=el("tbody");
+  const NP=c.past.length;
+
+  const vcell=(v,i,cls)=>{const td=el("td",{class:"v "+(i<NP?"past ":"")+(cls||"")});
+    td.textContent=v==null?"·":n0(v);return td;};
+
+  for(const r of c.rows){
+    tb.append(el("tr",{class:"sep"},el("td",{colspan:axis.length+1})));
+    const tag=r.loc.type==="distributor"?"dist":r.loc.type==="retail"?"retail":"direct";
+    const tagcls=r.loc.type==="direct"?"":"d";
+    // ship out row
+    const tr1=el("tr",{class:"r-out"});
+    const lab=el("td",{class:"stick"},el("div",{class:"lbl"},
+      el("span",{class:"tag "+tagcls},tag),
+      el("span",{style:"overflow:hidden;text-overflow:ellipsis"},r.loc.name)));
+    lab.title=r.loc.name+" — "+LOCTYPE[r.loc.type];
+    tr1.append(lab);
+    (r.pastOut||[]).forEach((v,i)=>tr1.append(vcell(v,i)));
+    r.ship.forEach((v,i)=>{
+      if(r.method==="planned"){
+        const w=c.weeks[i], pl=planOf(s.id);
+        const cur=(pl.planned[r.loc.id]||{})[w];
+        const td=el("td",{class:"v inp"+(cur!=null?" edited":"")});
+        td.append(el("input",{type:"text",inputmode:"numeric",value:cur!=null?n0(cur):"",
+          placeholder:n0(v)||"0",onchange:e=>setPlanned(s.id,r.loc.id,w,e.target.value)}));
+        tr1.append(td);
+      } else tr1.append(vcell(v,NP+i));
+    });
+    tb.append(tr1);
+    // their drawdown + SOH
+    if(r.tracks){
+      const tr2=el("tr",{});
+      const l2=el("td",{class:"stick"});
+      const bs=sel(Object.entries(BASES).filter(([k])=>k!=="planned"),r.basis,
+        {class:"basis",onchange:e=>setBasis(s.id,r.loc.id,e.target.value)});
+      l2.append(el("div",{class:"lbl"},el("span",{style:"padding-left:22px;color:var(--muted)"},"Their drawdown"),bs));
+      tr2.append(l2);
+      (r.pastDraw||[]).forEach((v,i)=>tr2.append(vcell(v,i)));
+      r.draw.forEach((v,i)=>tr2.append(vcell(v,NP+i,"dim")));
+      tb.append(tr2);
+      const tr3=el("tr",{class:"r-soh"});
+      const l3=el("td",{class:"stick"});
+      const ms=sel([["target_soh","Top up to target"],["planned","Their order plan"]],r.method,
+        {class:"basis",onchange:e=>setMethod(s.id,r.loc.id,e.target.value)});
+      l3.append(el("div",{class:"lbl"},el("span",{style:"padding-left:22px"},"Their SOH"),ms,
+        el("span",{class:"hint",title:"Target stock on hand at this distributor"},"tgt "+n0(r.target))));
+      tr3.append(l3);
+      (r.pastSoh||[]).forEach((v,i)=>tr3.append(vcell(v,i)));
+      r.soh.forEach((v,i)=>{const low=r.target>0&&v<r.target*0.4;
+        tr3.append(vcell(v,NP+i,v<0?"neg":low?"low":""));});
+      tb.append(tr3);
+    }
+  }
+  // ---- coldroom block ----
+  tb.append(el("tr",{class:"sep"},el("td",{colspan:axis.length+1})));
+  const trT=el("tr",{class:"tot"});
+  trT.append(el("td",{class:"stick"},el("div",{class:"lbl"},el("span",{class:"tag c"},"out"),"Total shipped out")));
+  (c.pastTotalOut||[]).forEach((v,i)=>trT.append(vcell(v,i)));
+  c.totalShip.forEach((v,i)=>trT.append(vcell(v,NP+i)));
+  tb.append(trT);
+
+  const trB=el("tr",{});
+  trB.append(el("td",{class:"stick"},el("div",{class:"lbl"},
+    el("span",{class:"tag c"},"in"),"Beer in (packaged)")));
+  (c.pastIn||c.past.map(()=>null)).forEach((v,i)=>trB.append(vcell(v,i)));
+  c.beerIn.forEach((v,i)=>{
+    const td=el("td",{class:"v"+(v>0?"":" past")});
+    if(v>0){td.append(el("button",{class:"btn sm",style:"padding:1px 5px",
+      onclick:()=>editRunsForWeek(s.id,c.weeks[i])},n0(v)));}
+    else{td.textContent="·";td.style.cursor="pointer";td.title="Schedule a packaging run";
+      td.onclick=()=>newRun(s.id,c.weeks[i]);}
+    trB.append(td);
+  });
+  tb.append(trB);
+
+  const trC=el("tr",{class:"tot"});
+  trC.append(el("td",{class:"stick"},el("div",{class:"lbl"},el("span",{class:"tag c"},"cold"),"Coldroom SOH")));
+  (c.pastCold||[]).forEach((v,i)=>trC.append(vcell(v,i)));
+  c.cold.forEach((v,i)=>trC.append(vcell(v,NP+i,v<0?"neg":v<c.wkAvg*1.5?"low":"")));
+  tb.append(trC);
+
+  const trD=el("tr",{});
+  trD.append(el("td",{class:"stick"},el("div",{class:"lbl"},
+    el("span",{style:"padding-left:22px;color:var(--muted)"},"Weeks of cover"))));
+  c.past.forEach((w,i)=>trD.append(vcell(null,i)));
+  c.cover.forEach((v,i)=>trD.append(vcell(v==null?null:Math.round(v*10)/10,NP+i,
+    v!=null&&v<0?"neg":v!=null&&v<S.config.coverWarnWeeks?"low":"")));
+  tb.append(trD);
+
+  t.append(tb); scroll.append(t); wrap.append(scroll);
+  if(c.stockoutWeek){
+    wrap.append(el("div",{class:"note",style:"margin:0;border:0;border-top:1px solid var(--line-soft);border-radius:0"},
+      el("b",{},s.product.name+" "+s.pack+" runs out of coldroom stock in the week of "+fmtD(c.stockoutWeek)+". "),
+      "At "+((P(s.product.id)||{}).brewToPackDays||21)+" days from brew to pack, brew by "+fmtD(c.brewBy)+". ",
+      el("button",{class:"btn sm",style:"margin-left:6px",onclick:()=>newRun(s.id,c.brewBy)},"Schedule a run")));
+  }
+  return wrap;
+}
+function setPlanned(sku,loc,wk,val){const pl=planOf(sku);pl.planned[loc]=pl.planned[loc]||{};
+  const v=num(val); if(v==null) delete pl.planned[loc][wk]; else pl.planned[loc][wk]=v;
+  persist("plan",pl);render();}
+function setBasis(sku,loc,v){const pl=planOf(sku);pl.basis[loc]=v;persist("plan",pl);render();}
+function setMethod(sku,loc,v){const pl=planOf(sku);pl.method[loc]=v;persist("plan",pl);render();}
+function saveConfig(){persist("config",Object.assign({id:"app"},S.config));}
+</script>
+<script>
+"use strict";
+/* ============================ 2. STOCKTAKE ============================ */
+let stWeek=null;
+function curStocktake(){
+  if(!S.stock.length) return null;
+  if(stWeek){const f=S.stock.find(s=>s.weekStart===stWeek); if(f) return f;}
+  return S.stock[0];
+}
+function viewStocktake(pane,ctl){
+  const st=curStocktake();
+  ctl.append(sel(S.stock.map(s=>[s.weekStart,fmtWY(s.weekStart)+"  ·  "+(s.entries||[]).length+" lines"]),
+    st?st.weekStart:"",{onchange:e=>{stWeek=e.target.value;render();}}));
+  ctl.append(el("button",{class:"btn pri",onclick:newStocktake},"New stocktake"));
+  if(!st){
+    pane.append(el("div",{class:"card"},el("div",{class:"empty"},el("b",{},"No stocktakes yet"),
+      "Start one for the week commencing "+fmtWY(S.config.currentWeek)+" and count what's in the coldroom and at each distributor.")));
+    return;
+  }
+  const byLoc={};
+  for(const e of (st.entries||[])){(byLoc[e.locationId]=byLoc[e.locationId]||[]).push(e);}
+  const t=el("div",{class:"tiles"});
+  const wkTile=tile("Week","w/c "+fmtWY(st.weekStart),"");
+  wkTile.lastChild.id="stProgress"; wkTile.lastChild.textContent=stProgressText(st);
+  t.append(wkTile);
+  const locOrder=Object.keys(byLoc).sort((a,b)=>((L(a)||{}).sort|0)-((L(b)||{}).sort|0));
+  for(const lid of locOrder.slice(0,5)){
+    const rows=byLoc[lid],ctns=sum(rows.filter(r=>r.pack==="Can"||r.pack==="10 Pack").map(r=>r.qty)),
+      kegs=sum(rows.filter(r=>r.pack==="Keg").map(r=>r.qty)),k30=sum(rows.filter(r=>r.pack==="30L Keg").map(r=>r.qty));
+    t.append(tile((L(lid)||{name:lid}).name,n0(ctns)+" ctn",n0(kegs)+" × 50L · "+n0(k30)+" × 30L"));
+  }
+  pane.append(t);
+
+  pane.append(el("div",{class:"note"},el("b",{},"How this is used. "),
+    "The most recent stocktake sets opening stock for the forecast — coldroom and each distributor's shelf. ",
+    "Best-before dates on each batch drive the aged-stock and send-by flags."));
+
+  const counted=new Set((st.entries||[]).map(e=>skuId(e.productId,e.pack)));
+  const missed=skus().filter(s=>s.product.forecast!==false&&!counted.has(s.id));
+  if(missed.length){
+    const m=el("div",{class:"card"});
+    m.append(el("header",{},el("h3",{},"Not counted this week"),
+      el("span",{class:"chip warn"},missed.length+" SKUs"),el("span",{style:"flex:1"}),
+      el("span",{class:"hint"},"Forecasting from the last known figure until they're counted")));
+    const w=el("div",{class:"scroll"}),tb=el("table");
+    tb.append(el("thead",{},el("tr",{},el("th",{},"SKU"),el("th",{class:"num"},"Coldroom carried forward"),el("th",{},""))));
+    const body=el("tbody");
+    for(const s of missed) body.append(el("tr",{class:"stripe warn"},
+      el("td",{},el("b",{},s.product.name+" "+s.pack)),
+      el("td",{class:"num"},n0(openingSOH(s.id,"coldroom"))),
+      el("td",{},el("button",{class:"btn sm",onclick:()=>editEntry(st,{locationId:"coldroom",
+        productId:s.product.id,pack:s.pack})},"Count it"))));
+    tb.append(body);w.append(tb);m.append(w);pane.append(m);
+  }
+
+  for(const lid of locOrder){
+    const loc=L(lid)||{name:lid,type:"distributor"};
+    const rows=byLoc[lid].slice().sort((a,b)=>(a.productId+a.pack).localeCompare(b.productId+b.pack));
+    const c=el("div",{class:"card"});
+    c.append(el("header",{},el("h3",{},loc.name),
+      el("span",{class:"chip acc"},LOCTYPE[loc.type]||"Location"),
+      el("span",{class:"chip"},rows.length+" lines"),
+      el("span",{style:"flex:1"}),
+      el("span",{class:"chip"},n0(sum(rows.map(r=>r.qty)))+" counted"),
+      el("button",{class:"btn sm",onclick:()=>editEntry(st,{locationId:lid})},"Add line")));
+    const w=el("div",{class:"scroll"}), tb=el("table");
+    tb.append(el("thead",{},el("tr",{},el("th",{},"Product"),el("th",{},"Pack"),el("th",{},"Batch"),
+      el("th",{class:"num"},"Count"),el("th",{},"Best before"),el("th",{},"Send by"),
+      el("th",{class:"num"},"Days left"),el("th",{},""))));
+    const body=el("tbody");
+    for(const e of rows){
+      const sm=shelfMonths(e.productId,e.pack);
+      const sb=e.bestBefore?iso(new Date(D(e.bestBefore)-Math.round(sm/2*30.44)*DAY)):null;
+      const d=sb?dDiff(S.config.currentWeek,sb):null;
+      const qty=el("input",{class:"cellinp num qty",type:"text",inputmode:"decimal",
+        value:e.qty?n0(e.qty):"", placeholder:"0",
+        onfocus:ev=>ev.target.select(),
+        onkeydown:ev=>stepCell(ev),
+        onchange:ev=>{e.qty=num(ev.target.value)||0;stSave(st);}});
+      const bat=el("input",{class:"cellinp mono",type:"text",value:e.batch||"",placeholder:"batch",
+        onkeydown:ev=>stepCell(ev),
+        onchange:ev=>{e.batch=ev.target.value.trim();stSave(st);}});
+      const bb=el("input",{class:"cellinp mono",type:"date",value:e.bestBefore||"",
+        onchange:ev=>{e.bestBefore=ev.target.value||null;stSave(st);render();}});
+      body.append(el("tr",{class:"stripe "+(d==null?"":d<=0?"crit":d<=28?"warn":""),
+          "data-zero":String(!e.qty)},
+        el("td",{},(P(e.productId)||{name:e.productId}).name),
+        el("td",{class:"dim"},e.pack),
+        el("td",{class:"cell"},bat),
+        el("td",{class:"cell"},qty),
+        el("td",{class:"cell"},bb),
+        el("td",{class:"mono dim"},fmtD(sb)),
+        el("td",{class:"num"},d==null?"—":String(d)),
+        el("td",{},el("button",{class:"btn sm",title:"Remove this line",
+          onclick:()=>{if(!confirm("Remove this line from the stocktake?"))return;
+            st.entries=st.entries.filter(x=>x.id!==e.id);stSave(st);render();}},"×"))));
+    }
+    tb.append(body); w.append(tb); c.append(w); pane.append(c);
+  }
+}
+/* inline grid entry: debounce writes so typing down a column is one save, not fifty */
+let stTimer=null, stPending=null;
+function stSave(st){
+  S.calcCache=null; stPending=st;
+  const chip=$("#stProgress"); if(chip) chip.textContent=stProgressText(st);
+  clearTimeout(stTimer);
+  stTimer=setTimeout(()=>{ if(stPending){persist("stocktakes",stPending); stPending=null;} },700);
+}
+function stProgressText(st){
+  const n=(st.entries||[]).length, done=(st.entries||[]).filter(e=>e.qty).length;
+  return done+" of "+n+" lines counted";
+}
+/* Enter / arrows walk down the column so a count can be typed without the mouse */
+function stepCell(ev){
+  const k=ev.key;
+  if(k!=="Enter"&&k!=="ArrowDown"&&k!=="ArrowUp") return;
+  if(k!=="Enter"&&ev.target.type==="date") return;
+  const td=ev.target.closest("td"), tr=td&&td.closest("tr");
+  if(!tr) return;
+  const i=[...tr.children].indexOf(td);
+  const next=(k==="ArrowUp")?tr.previousElementSibling:tr.nextElementSibling;
+  const to=next&&next.children[i]&&next.children[i].querySelector("input");
+  if(to){ ev.preventDefault(); to.focus(); if(to.select) to.select(); }
+}
+
+function newStocktake(){
+  const last=S.stock[0];
+  openDialog("New stocktake",b=>{
+    b.append(el("div",{class:"grid2"},
+      field("Week commencing",el("input",{type:"date",id:"stw",value:S.config.currentWeek})),
+      field("Start from",sel([["copy","Last stocktake's batches (qty cleared)"],["blank","Empty sheet"]],
+        last?"copy":"blank",{id:"stmode"}))));
+    b.append(el("div",{class:"note"},"Counts are entered per batch so best-before dates stay attached to the stock. ",
+      "Copying last week keeps the batch and best-before columns so you only type quantities."));
+  },body=>{
+    const w=monday($("#stw",body).value||S.config.currentWeek);
+    if(S.stock.some(s=>s.weekStart===w)){flash("A stocktake already exists for that week");return false;}
+    const mode=$("#stmode",body).value;
+    const entries=(mode==="copy"&&last?(last.entries||[]).map(e=>({...e,id:uid("e"),qty:0})):[]);
+    const doc={id:w,weekStart:w,status:"draft",entries,createdAt:new Date().toISOString(),note:""};
+    S.stock.unshift(doc); S.stock.sort((a,b)=>a.weekStart<b.weekStart?1:-1);
+    S.config.currentWeek=w; saveConfig(); persist("stocktakes",doc); stWeek=w;
+    flash("Stocktake created for w/c "+fmtWY(w));
+  },"Create");
+}
+function editEntry(st,e){
+  const isNew=!e.id;
+  openDialog(isNew?"Add stock line":"Edit stock line",b=>{
+    const prods=S.products.slice().sort((a,b)=>a.name.localeCompare(b.name));
+    b.append(el("div",{class:"grid2"},
+      field("Product",sel(prods.map(p=>[p.id,p.name]),e.productId,{id:"ep",onchange:()=>syncPacks(b)})),
+      field("Pack",sel(PACKS.map(p=>[p,p]),e.pack,{id:"ek"}))));
+    b.append(el("div",{class:"grid3"},
+      field("Location",sel(S.locations.map(l=>[l.id,l.name]),e.locationId,{id:"el"})),
+      field("Batch / lot",el("input",{type:"text",id:"eb",value:e.batch||"",placeholder:"260055"})),
+      field("Quantity",el("input",{type:"number",id:"eq",value:e.qty!=null?e.qty:"",step:"0.5"}))));
+    b.append(el("div",{class:"grid2"},
+      field("Best before",el("input",{type:"date",id:"ebb",value:e.bestBefore||""})),
+      field("Packaged on",el("input",{type:"date",id:"epd",value:e.packDate||""}),"Optional — used to show how much shelf life is left")));
+    if(!isNew) b.append(el("button",{class:"btn danger",type:"button",style:"align-self:flex-start",
+      onclick:()=>{st.entries=st.entries.filter(x=>x.id!==e.id);persist("stocktakes",st);$("#dlg").close();render();}},"Delete line"));
+    syncPacks(b,e.pack);
+  },body=>{
+    const rec={id:e.id||uid("e"),productId:$("#ep",body).value,pack:$("#ek",body).value,
+      locationId:$("#el",body).value,batch:$("#eb",body).value.trim(),qty:num($("#eq",body).value)||0,
+      bestBefore:$("#ebb",body).value||null,packDate:$("#epd",body).value||null};
+    if(!rec.productId){flash("Pick a product");return false;}
+    st.entries=st.entries||[];
+    const i=st.entries.findIndex(x=>x.id===rec.id);
+    if(i>=0) st.entries[i]=rec; else st.entries.push(rec);
+    persist("stocktakes",st);
+  });
+}
+function syncPacks(b,keep){
+  const p=P($("#ep",b).value), k=$("#ek",b), cur=keep||k.value;
+  clear(k); for(const q of ((p&&p.packs)||[]).length?p.packs:PACKS.map(c=>({code:c})))
+    k.append(el("option",{value:q.code,selected:q.code===cur},q.code));
+}
+
+/* ============================ 3. PRODUCTION ============================ */
+function viewProduction(pane,ctl){
+  ctl.append(el("button",{class:"btn pri",onclick:()=>newRun()},"Schedule run"));
+  const all=computeAll(), a=alertsSafe();
+  const up=S.runs.filter(r=>r.status!=="cancelled").sort((x,y)=>x.packDate<y.packDate?-1:1);
+  const future=up.filter(r=>r.packDate>=S.config.currentWeek);
+  const t=el("div",{class:"tiles"});
+  t.append(tile("Runs scheduled",String(future.length),future.length?"Next "+fmtD(future[0].packDate):"Nothing booked"));
+  t.append(tile("Litres planned",n0(sum(future.map(litres))),"Next "+S.config.horizon+" weeks"));
+  t.append(tile("SKUs needing a run",String(a.filter(x=>x.sev!=="ok").length),"Within 10 weeks",
+    a.filter(x=>x.sev==="crit").length?"alert":"warn"));
+  const nb=a.filter(x=>x.brewBy).sort((x,y)=>x.brewBy<y.brewBy?-1:1)[0];
+  t.append(tile("Earliest brew-by",nb?fmtD(nb.brewBy):"—",nb?nb.name:"All covered"));
+  pane.append(t);
+
+  if(a.filter(x=>x.sev!=="ok").length){
+    const c=el("div",{class:"card"});
+    c.append(el("header",{},el("h3",{},"Suggested from the forecast"),
+      el("span",{class:"hint"},"Brew dates work back from the pack week using each product's brew-to-pack time")));
+    const w=el("div",{class:"scroll"}),tb=el("table");
+    tb.append(el("thead",{},el("tr",{},el("th",{},"SKU"),el("th",{},"Coldroom empty"),el("th",{},"Pack by"),
+      el("th",{},"Brew by"),el("th",{class:"num"},"Shortfall to cover"),el("th",{},""))));
+    const body=el("tbody");
+    for(const x of a.filter(y=>y.sev!=="ok")){
+      const c2=all[x.sku]; const need=Math.abs(Math.min(...c2.cold));
+      body.append(el("tr",{class:"stripe "+x.sev},
+        el("td",{},el("b",{},x.name)),
+        el("td",{class:"mono"},fmtD(x.week)),
+        el("td",{class:"mono"},fmtD(wkAdd(x.week,-1))),
+        el("td",{class:"mono"},fmtD(x.brewBy)),
+        el("td",{class:"num"},n0(need)),
+        el("td",{},el("button",{class:"btn sm",onclick:()=>newRun(x.sku,wkAdd(x.week,-1),Math.ceil(need))},"Schedule"))));
+    }
+    tb.append(body);w.append(tb);c.append(w);pane.append(c);
+  }
+
+  const c=el("div",{class:"card"});
+  c.append(el("header",{},el("h3",{},"Packaging schedule"),el("span",{class:"chip"},up.length+" runs")));
+  if(!up.length) c.append(el("div",{class:"empty"},el("b",{},"Nothing scheduled"),
+    "Add a packaging run and it feeds straight into the coldroom forecast as Beer In."));
+  else{
+    const w=el("div",{class:"scroll"}),tb=el("table");
+    tb.append(el("thead",{},el("tr",{},el("th",{},"Brew by"),el("th",{},"Pack date"),el("th",{},"Week"),
+      el("th",{},"Product"),el("th",{},"Pack"),el("th",{class:"num"},"Units"),el("th",{class:"num"},"Litres"),
+      el("th",{},"Status"),el("th",{},""))));
+    const body=el("tbody");
+    for(const r of up){
+      const p=P(r.productId)||{name:r.productId,brewToPackDays:21};
+      const brew=r.brewDate||iso(new Date(D(r.packDate)-(p.brewToPackDays||21)*DAY));
+      const past=r.packDate<S.config.currentWeek;
+      body.append(el("tr",{class:"stripe "+(past?"":r.status==="confirmed"?"ok":"warn")},
+        el("td",{class:"mono dim"},fmtD(brew)),
+        el("td",{class:"mono"},el("b",{},fmtD(r.packDate))),
+        el("td",{class:"mono dim"},"w/c "+fmtW(monday(r.packDate))),
+        el("td",{},p.name),el("td",{class:"dim"},r.pack),
+        el("td",{class:"num"},n0(r.units)),
+        el("td",{class:"num dim"},n0(litres(r))),
+        el("td",{},el("span",{class:"chip "+(r.status==="confirmed"?"ok":"warn")},r.status||"planned")),
+        el("td",{},el("button",{class:"btn sm",onclick:()=>newRun(skuId(r.productId,r.pack),null,null,r)},"Edit"))));
+    }
+    tb.append(body);w.append(tb);c.append(w);
+  }
+  pane.append(c);
+  pane.append(el("div",{class:"note"},el("b",{},"Brew-to-pack time "),
+    "is set per product in Setup (default 21 days). Change it there and every brew-by date on this page moves with it."));
+}
+const LPU={"Can":24*0.375,"10 Pack":10*0.375,"Keg":50,"30L Keg":30};
+function litres(r){return (num(r.units)||0)*(LPU[r.pack]||1);}
+
+function newRun(sku,packDate,units,existing){
+  const s=sku?{pid:sku.split("__")[0],pack:(skus().find(x=>x.id===sku)||{}).pack}:null;
+  const r=existing||{id:uid("run"),productId:s?s.pid:(S.products[0]||{}).id,pack:s?s.pack:"Can",
+    packDate:packDate||wkAdd(S.config.currentWeek,2),units:units||"",status:"planned",note:""};
+  openDialog(existing?"Edit packaging run":"Schedule packaging run",b=>{
+    b.append(el("div",{class:"grid2"},
+      field("Product",sel(S.products.map(p=>[p.id,p.name]),r.productId,{id:"rp",onchange:()=>{syncPacks(b);syncBrew(b);}})),
+      field("Pack",sel(PACKS.map(p=>[p,p]),r.pack,{id:"rk",onchange:()=>syncBrew(b)}))));
+    b.append(el("div",{class:"grid3"},
+      field("Pack date",el("input",{type:"date",id:"rd",value:r.packDate,onchange:()=>syncBrew(b)})),
+      field("Units",el("input",{type:"number",id:"ru",value:r.units,placeholder:"576"})),
+      field("Status",sel([["planned","Planned"],["confirmed","Confirmed"],["cancelled","Cancelled"]],r.status,{id:"rs"}))));
+    b.append(el("div",{class:"note",id:"rbrew"},"—"));
+    field("","");
+    b.append(field("Note",el("input",{type:"text",id:"rn",value:r.note||"",placeholder:"Tank 4, double batch"})));
+    if(existing) b.append(el("button",{class:"btn danger",type:"button",style:"align-self:flex-start",
+      onclick:()=>{S.runs=S.runs.filter(x=>x.id!==r.id);remove("runs",r.id);$("#dlg").close();render();}},"Delete run"));
+    syncPacks(b,r.pack); syncBrew(b);
+  },body=>{
+    const rec={id:r.id,productId:$("#rp",body).value,pack:$("#rk",body).value,packDate:$("#rd",body).value,
+      units:num($("#ru",body).value)||0,status:$("#rs",body).value,note:$("#rn",body).value.trim()};
+    if(!rec.packDate||!rec.units){flash("A run needs a pack date and a quantity");return false;}
+    const p=P(rec.productId)||{};
+    rec.brewDate=iso(new Date(D(rec.packDate)-(p.brewToPackDays||21)*DAY));
+    const i=S.runs.findIndex(x=>x.id===rec.id);
+    if(i>=0) S.runs[i]=rec; else S.runs.push(rec);
+    persist("runs",rec); flash("Run saved — the coldroom forecast has moved");
+  },existing?"Save":"Schedule");
+}
+function syncBrew(b){
+  const p=P($("#rp",b).value)||{brewToPackDays:21}, d=$("#rd",b).value;
+  const n=$("#rbrew",b); clear(n);
+  if(!d){n.textContent="Pick a pack date to see the brew date.";return;}
+  const brew=iso(new Date(D(d)-(p.brewToPackDays||21)*DAY));
+  n.append(el("b",{},"Brew by "+fmtD(brew)+". "),
+    (p.brewToPackDays||21)+" days from brew to pack for "+(p.name||"this product")+
+    ", so it lands in the coldroom in the week commencing "+fmtW(monday(d))+".");
+}
+function editRunsForWeek(sku,week){
+  const s=skus().find(x=>x.id===sku);
+  const rs=S.runs.filter(r=>skuId(r.productId,r.pack)===sku&&monday(r.packDate)===week&&r.status!=="cancelled");
+  if(rs.length===1) return newRun(sku,null,null,rs[0]);
+  openDialog("Runs in w/c "+fmtWY(week),b=>{
+    for(const r of rs) b.append(el("div",{class:"row"},
+      el("span",{},fmtD(r.packDate)+" · "+n0(r.units)+" "+(PACK_UNIT[r.pack]||"units")),
+      el("button",{class:"btn sm",type:"button",onclick:()=>{$("#dlg").close();newRun(sku,null,null,r);}},"Edit")));
+    b.append(el("button",{class:"btn",type:"button",style:"align-self:flex-start",
+      onclick:()=>{$("#dlg").close();newRun(sku,week);}},"Add another run"));
+  });
+}
+</script>
+<script>
+"use strict";
+/* ============================ 4. AGED STOCK ============================ */
+let ageFilter={loc:"all",status:"all"};
+function viewAgeing(pane,ctl){
+  const rows=ageRows();
+  const locs=[...new Set(rows.map(r=>r.locationId))];
+  ctl.append(sel([["all","All locations"],...locs.map(l=>[l,(L(l)||{name:l}).name])],ageFilter.loc,
+    {onchange:e=>{ageFilter.loc=e.target.value;render();}}));
+  ctl.append(sel([["all","Everything"],["attention","Needs attention"],["pastsend","Past send-by"],
+    ["expired","Past best before"],["soon","Send-by within 4 weeks"]],ageFilter.status,
+    {onchange:e=>{ageFilter.status=e.target.value;render();}}));
+
+  const st=latestStocktake();
+  if(!rows.length){
+    pane.append(el("div",{class:"card"},el("div",{class:"empty"},el("b",{},"No stock to age"),
+      "Enter a stocktake with batch numbers and best-before dates and this fills in.")));
+    return;
+  }
+  const cnt=k=>rows.filter(r=>r.status===k);
+  const qty=list=>{const c=sum(list.filter(r=>r.pack==="Can"||r.pack==="10 Pack").map(r=>r.qty)),
+    k=sum(list.filter(r=>r.pack==="Keg"||r.pack==="30L Keg").map(r=>r.qty));
+    return n0(c)+" ctn · "+n0(k)+" kegs";};
+  const t=el("div",{class:"tiles"});
+  t.append(tile("Past best before",String(cnt("expired").length),qty(cnt("expired")),cnt("expired").length?"alert":"good"));
+  t.append(tile("Past send-by",String(cnt("pastsend").length),qty(cnt("pastsend"))+" — can't go to a distributor",
+    cnt("pastsend").length?"alert":"good"));
+  t.append(tile("Send-by within 4 weeks",String(cnt("soon").length),qty(cnt("soon")),cnt("soon").length?"warn":"good"));
+  t.append(tile("Clean stock",String(cnt("ok").length),qty(cnt("ok")),"good"));
+  t.append(tile("Counted","w/c "+fmtWY(st.weekStart),(st.entries||[]).length+" lines"));
+  pane.append(t);
+
+  pane.append(el("div",{class:"note"},el("b",{},"Send-by "),
+    "is the last date a batch can go to a distributor while it still has half its shelf life left — ",
+    "best before minus half the product's shelf life. Shelf life per pack is set in Setup."));
+
+  let list=rows;
+  if(ageFilter.loc!=="all") list=list.filter(r=>r.locationId===ageFilter.loc);
+  if(ageFilter.status==="attention") list=list.filter(r=>r.status!=="ok");
+  else if(ageFilter.status!=="all") list=list.filter(r=>r.status===ageFilter.status);
+
+  const c=el("div",{class:"card"});
+  c.append(el("header",{},el("h3",{},"Batches by urgency"),el("span",{class:"chip"},list.length+" lines"),
+    el("span",{style:"flex:1"}),
+    el("button",{class:"btn sm",onclick:()=>exportAge(list)},"Copy as text")));
+  if(!list.length) c.append(el("div",{class:"empty"},el("b",{},"Nothing matches"),"Try a wider filter."));
+  else{
+    const w=el("div",{class:"scroll"}),tb=el("table");
+    tb.append(el("thead",{},el("tr",{},el("th",{},"Product"),el("th",{},"Pack"),el("th",{},"Batch"),
+      el("th",{},"Location"),el("th",{class:"num"},"Qty"),el("th",{},"Packaged"),el("th",{},"Send by"),
+      el("th",{},"Best before"),el("th",{class:"num"},"Days to send-by"),el("th",{},"Life left"),el("th",{},"Status"))));
+    const body=el("tbody");
+    const SB={expired:["crit","Best before"],pastsend:["crit","Send-by"],
+      soon:["warn","Send soon"],ok:["ok","OK"]};
+    for(const r of list){
+      const [cls,lab]=SB[r.status];
+      const pct=r.pctLeft==null?null:Math.round(r.pctLeft*100);
+      const bar=el("div",{class:"bar"},el("i",{class:pct==null?"":pct<25?"crit":pct<50?"warn":"ok",
+        style:"width:"+(pct==null?0:pct)+"%"}));
+      body.append(el("tr",{class:"stripe "+(r.status==="ok"?"":cls)},
+        el("td",{},el("b",{},(P(r.productId)||{name:r.productId}).name)),
+        el("td",{class:"dim"},r.pack),
+        el("td",{class:"mono"},r.batch||"—"),
+        el("td",{},(L(r.locationId)||{name:r.locationId}).name),
+        el("td",{class:"num"},n0(r.qty)),
+        el("td",{class:"mono dim"},fmtD(r.packDate)),
+        el("td",{class:"mono"},fmtD(r.sendBy)),
+        el("td",{class:"mono dim"},fmtD(r.bestBefore)),
+        el("td",{class:"num"},r.daysToSend==null?"—":String(r.daysToSend)),
+        el("td",{},bar),
+        el("td",{},el("span",{class:"chip "+cls},lab))));
+    }
+    tb.append(body);w.append(tb);c.append(w);
+  }
+  pane.append(c);
+}
+function exportAge(list){
+  const txt=list.map(r=>[(P(r.productId)||{}).name,r.pack,r.batch,(L(r.locationId)||{}).name,
+    n0(r.qty),"BB "+fmtD(r.bestBefore),"send by "+fmtD(r.sendBy),
+    (r.daysToSend==null?"":r.daysToSend+" days")].join("\t")).join("\n");
+  navigator.clipboard&&navigator.clipboard.writeText(txt).then(()=>flash("Copied "+list.length+" lines"),
+    ()=>flash("Couldn't copy — your browser blocked it"));
+}
+
+/* ============================ 5. SETUP ============================ */
+function viewSetup(pane,ctl){
+  ctl.append(el("button",{class:"btn",onclick:editLocation},"Add distributor or channel"));
+  ctl.append(el("button",{class:"btn pri",onclick:()=>editProduct()},"Add product"));
+
+  /* products */
+  const pc=el("div",{class:"card"});
+  pc.append(el("header",{},el("h3",{},"Products and packs"),el("span",{class:"chip"},S.products.length+" products"),
+    el("span",{style:"flex:1"}),el("span",{class:"hint"},"Shelf life drives the send-by cut-off; brew-to-pack drives brew dates")));
+  const pw=el("div",{class:"scroll"}),pt=el("table");
+  pt.append(el("thead",{},el("tr",{},el("th",{},"Product"),el("th",{},"Packs"),el("th",{},"Shelf life"),
+    el("th",{class:"num"},"Brew → pack"),el("th",{},"In forecast"),el("th",{},""))));
+  const pb=el("tbody");
+  for(const p of S.products.slice().sort((a,b)=>(a.forecast===false)-(b.forecast===false)||(a.sort|0)-(b.sort|0))){
+    pb.append(el("tr",{},
+      el("td",{},el("b",{},p.name)),
+      el("td",{class:"dim"},(p.packs||[]).map(q=>q.code).join(", ")||"—"),
+      el("td",{class:"dim mono"},(p.packs||[]).map(q=>q.code.replace("30L Keg","30L")+" "+q.shelfLifeMonths+"m").join("  ")||"—"),
+      el("td",{class:"num"},(p.brewToPackDays||21)+" d"),
+      el("td",{},el("span",{class:"chip "+(p.forecast===false?"":"ok")},p.forecast===false?"Stock only":"Forecast")),
+      el("td",{},el("button",{class:"btn sm",onclick:()=>editProduct(p)},"Edit"))));
+  }
+  pt.append(pb);pw.append(pt);pc.append(pw);pane.append(pc);
+
+  /* locations */
+  const lc=el("div",{class:"card"});
+  lc.append(el("header",{},el("h3",{},"Distributors and customer channels"),
+    el("span",{class:"chip"},S.locations.length+" locations")));
+  const lw=el("div",{class:"scroll"}),lt=el("table");
+  lt.append(el("thead",{},el("tr",{},el("th",{},"Name"),el("th",{},"Type"),el("th",{},"Replenishment"),
+    el("th",{class:"num"},"Target cover"),el("th",{class:"num"},"Lead time"),el("th",{class:"num"},"Order multiple"),el("th",{},""))));
+  const lb=el("tbody");
+  for(const l of S.locations.slice().sort((a,b)=>(a.sort|0)-(b.sort|0))){
+    const tracks=l.type==="distributor"||l.type==="retail";
+    lb.append(el("tr",{},
+      el("td",{},el("b",{},l.name)),
+      el("td",{},el("span",{class:"chip "+(l.type==="internal"?"":"acc")},LOCTYPE[l.type]||l.type)),
+      el("td",{class:"dim"},!tracks?"Ships straight from coldroom":
+        l.method==="planned"?"Their order plan ("+(l.plannedHorizon||13)+" wks)":"Top up to target SOH"),
+      el("td",{class:"num dim"},tracks?(l.targetWeeks||3)+" wks":"—"),
+      el("td",{class:"num dim"},tracks?(l.leadTimeWeeks||0)+" wks":"—"),
+      el("td",{class:"num dim"},tracks?n0(l.orderMultiple||1):"—"),
+      el("td",{},el("button",{class:"btn sm",onclick:()=>editLocation(l)},"Edit"))));
+  }
+  lt.append(lb);lw.append(lt);lc.append(lw);pane.append(lc);
+
+  /* settings */
+  const sc=el("div",{class:"card"});
+  sc.append(el("header",{},el("h3",{},"Forecast settings")));
+  const b=el("div",{class:"body"});
+  b.append(el("div",{class:"grid3"},
+    field("Current week",el("input",{type:"date",value:S.config.currentWeek,
+      onchange:e=>{S.config.currentWeek=monday(e.target.value);S.calcCache=null;saveConfig();render();}}),
+      "Everything is measured from here"),
+    field("Default demand basis",sel([["prior_year","Prior year"],["recent_avg","Recent average"],["manual","Manual entry"]],
+      S.config.defaultDrawBasis,{onchange:e=>{S.config.defaultDrawBasis=e.target.value;S.calcCache=null;saveConfig();render();}}),
+      "Override per distributor in the forecast grid"),
+    field("Recent average window",el("input",{type:"number",min:"2",max:"52",value:S.config.avgWindow,
+      onchange:e=>{S.config.avgWindow=Math.max(2,num(e.target.value)||8);S.calcCache=null;saveConfig();render();}}),
+      "Weeks of history to average")));
+  b.append(el("div",{class:"grid3"},
+    field("Weeks shown before now",el("input",{type:"number",min:"0",max:"26",value:S.config.past,
+      onchange:e=>{S.config.past=Math.max(0,num(e.target.value)||0);S.calcCache=null;saveConfig();render();}})),
+    field("Low-cover warning",el("input",{type:"number",min:"0",step:"0.5",value:S.config.coverWarnWeeks,
+      onchange:e=>{S.config.coverWarnWeeks=num(e.target.value)||2;S.calcCache=null;saveConfig();render();}}),
+      "Weeks of coldroom cover before a week is flagged"),
+    field("Forecast horizon",sel([[13,"13 weeks"],[26,"26 weeks"],[52,"52 weeks"]],S.config.horizon,
+      {onchange:e=>{S.config.horizon=+e.target.value;S.calcCache=null;saveConfig();render();}}))));
+  sc.append(b);pane.append(sc);
+}
+
+function editProduct(p){
+  const isNew=!p;
+  const rec=p||{id:"",name:"",active:true,forecast:true,brewToPackDays:21,sort:S.products.length,packs:[],surplusTarget:{}};
+  openDialog(isNew?"Add product":"Edit "+rec.name,b=>{
+    b.append(el("div",{class:"grid3"},
+      field("Name",el("input",{type:"text",id:"pn",value:rec.name,placeholder:"Larry"})),
+      field("Brew → pack",el("input",{type:"number",id:"pb",value:rec.brewToPackDays||21,min:"0"}),"Days"),
+      field("Include in forecast",sel([["yes","Yes — full forecast"],["no","No — track stock only"]],
+        rec.forecast===false?"no":"yes",{id:"pf"}))));
+    b.append(el("div",{class:"fld"},"Packs"));
+    const pk=el("div",{class:"body",style:"padding:0;display:flex;flex-direction:column;gap:8px"});
+    for(const code of PACKS){
+      const q=(rec.packs||[]).find(x=>x.code===code);
+      const on=el("input",{type:"checkbox",id:"pk-"+slug(code),checked:!!q});
+      const sh=el("input",{type:"number",id:"sh-"+slug(code),value:(q&&q.shelfLifeMonths)||PACK_SHELF[code],
+        min:"1",max:"60",style:"width:70px"});
+      pk.append(el("div",{class:"row",style:"align-items:center"},
+        el("label",{class:"row",style:"align-items:center;gap:7px;min-width:130px"},on,el("span",{},code)),
+        el("span",{class:"hint"},"shelf life"),sh,el("span",{class:"hint"},"months · "+PACK_UNIT[code])));
+    }
+    b.append(pk);
+    b.append(el("div",{class:"note"},"Send-by is best before minus half the shelf life set here, ",
+      "so a 12-month can can't ship to a distributor with under 6 months left."));
+  },body=>{
+    const name=$("#pn",body).value.trim();
+    if(!name){flash("Give the product a name");return false;}
+    rec.name=name; rec.id=rec.id||slug(name);
+    rec.brewToPackDays=num($("#pb",body).value)||21;
+    rec.forecast=$("#pf",body).value==="yes";
+    rec.packs=PACKS.filter(c=>$("#pk-"+slug(c),body).checked).map(c=>({code:c,unitLabel:PACK_UNIT[c],
+      shelfLifeMonths:num($("#sh-"+slug(c),body).value)||PACK_SHELF[c],active:true}));
+    if(isNew) S.products.push(rec);
+    S.products.sort((a,b2)=>(a.sort|0)-(b2.sort|0));
+    persist("products",rec); flash(name+" saved");
+  });
+}
+function editLocation(l){
+  const isNew=!l||!l.id;
+  const rec=(l&&l.id)?l:{id:"",name:"",type:"distributor",method:"target_soh",active:true,
+    sort:S.locations.length,targetWeeks:3,leadTimeWeeks:1,orderMultiple:1,plannedHorizon:13};
+  openDialog(isNew?"Add distributor or channel":"Edit "+rec.name,b=>{
+    b.append(el("div",{class:"grid2"},
+      field("Name",el("input",{type:"text",id:"ln",value:rec.name,placeholder:"Paramount VIC"})),
+      field("Type",sel([["distributor","Distributor — holds our stock"],["retail","Retail chain — holds our stock"],
+        ["direct","Direct channel — ships from coldroom"],["internal","Internal (coldroom, quarantine)"]],rec.type,
+        {id:"lt",onchange:()=>toggleLoc(b)}))));
+    const box=el("div",{id:"lbox",class:"grid2"});
+    box.append(field("Replenishment",sel([["target_soh","Top up to a target stock level"],
+      ["planned","They send us an order plan"]],rec.method,{id:"lm"}),
+      "Order plans are typed straight into the forecast grid"));
+    box.append(field("Order plan horizon",el("input",{type:"number",id:"lh",value:rec.plannedHorizon||13,min:"1",max:"52"}),"Weeks"));
+    box.append(field("Target cover",el("input",{type:"number",id:"lw",value:rec.targetWeeks||3,min:"0",step:"0.5"}),
+      "Weeks of their drawdown to hold in their warehouse"));
+    box.append(field("Lead time",el("input",{type:"number",id:"ll",value:rec.leadTimeWeeks||0,min:"0",max:"12"}),"Weeks from order to delivery"));
+    box.append(field("Order multiple",el("input",{type:"number",id:"lo",value:rec.orderMultiple||1,min:"1"}),
+      "Round orders up to this — e.g. 144 for a pallet of cans"));
+    b.append(box); toggleLoc(b,rec.type);
+    if(!isNew) b.append(el("button",{class:"btn danger",type:"button",style:"align-self:flex-start",
+      onclick:()=>{if(!confirm("Remove "+rec.name+" from the tool? Stocktake lines against it stay but won't be forecast."))return;
+        S.locations=S.locations.filter(x=>x.id!==rec.id);remove("locations",rec.id);$("#dlg").close();render();}},"Remove"));
+  },body=>{
+    const name=$("#ln",body).value.trim();
+    if(!name){flash("Give it a name");return false;}
+    rec.name=name; rec.id=rec.id||slug(name); rec.type=$("#lt",body).value;
+    rec.method=$("#lm",body).value; rec.plannedHorizon=num($("#lh",body).value)||13;
+    rec.targetWeeks=num($("#lw",body).value)||3; rec.leadTimeWeeks=num($("#ll",body).value)||0;
+    rec.orderMultiple=num($("#lo",body).value)||1;
+    if(isNew) S.locations.push(rec);
+    S.locations.sort((a,b2)=>(a.sort|0)-(b2.sort|0));
+    persist("locations",rec); flash(name+" saved");
+  });
+}
+function toggleLoc(b,t){
+  const type=t||$("#lt",b).value, tracks=(type==="distributor"||type==="retail");
+  $("#lbox",b).style.display=tracks?"grid":"none";
+}
+
+/* ============================ go ============================ */
+boot();
+</script>
+
+</body>
+</html>
