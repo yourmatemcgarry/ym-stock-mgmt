@@ -135,6 +135,31 @@ tbody tr:hover input.cellinp{background:var(--surface)}
 tbody tr[data-zero="true"] input.cellinp.qty{background:var(--warn-soft);color:var(--warn);font-weight:600}
 tbody tr[data-zero="true"] input.cellinp.qty:focus{background:var(--accent-soft);color:var(--ink)}
 
+/* ---------- charts ---------- */
+:root{ --viz-1:#2a78d6; --viz-2:#eb6834; --viz-3:#1baf7a; }
+@media (prefers-color-scheme:dark){ :root:not([data-theme="light"]){
+  --viz-1:#3987e5; --viz-2:#d95926; --viz-3:#199e70; } }
+:root[data-theme="dark"]{ --viz-1:#3987e5; --viz-2:#d95926; --viz-3:#199e70; }
+.viz{margin:0;display:flex;flex-direction:column;gap:10px}
+.viz figcaption{font:600 13px/1.4 var(--sans);color:var(--ink-2)}
+.viz figcaption .hint{font-weight:400}
+.viz-legend{display:flex;gap:16px;flex-wrap:wrap}
+.viz-key{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)}
+.viz-key i,.viz-tiprow i{width:10px;height:10px;border-radius:2px;flex:none;display:inline-block}
+.viz-plot{position:relative}
+.viz-svg{width:100%;height:auto;display:block;overflow:visible}
+.viz-grid{stroke:var(--line-soft);stroke-width:1}
+.viz-axis{fill:var(--faint);font:500 10px var(--mono)}
+.viz-label{fill:var(--muted);font:600 11px var(--sans)}
+.viz-cross{stroke:var(--line);stroke-width:1;stroke-dasharray:3 3}
+.viz-tip{position:absolute;top:4px;background:var(--surface);border:1px solid var(--line);
+  border-radius:var(--r);box-shadow:var(--shadow);padding:8px 10px;font-size:12px;
+  pointer-events:none;min-width:150px;z-index:2}
+.viz-tip b{display:block;margin-bottom:4px;font-family:var(--mono);font-size:11px;color:var(--muted)}
+.viz-tiprow{display:flex;align-items:center;gap:7px;padding:2px 0}
+.viz-tiprow span{flex:1;color:var(--ink-2)}
+.viz-tiprow b{display:inline;margin:0;font-family:var(--mono);color:var(--ink);font-size:12px}
+
 /* ---------- chips ---------- */
 .chip{display:inline-flex;align-items:center;gap:4px;font:600 10.5px/1 var(--sans);letter-spacing:.05em;
   text-transform:uppercase;padding:4px 7px;border-radius:4px;background:var(--sunk);color:var(--muted);white-space:nowrap}
@@ -391,8 +416,11 @@ async function boot(){
   if(b&&b.kind==="rest"&&!S.products.length){ setupScreen(); return; }
   if(!S.products.length) seedBlank();
   S.ready=true;
-  const lastSt=S.stock[0];
-  if(lastSt&&wkDiff(S.config.currentWeek,lastSt.weekStart)>0) S.config.currentWeek=lastSt.weekStart;
+  /* the working week is this calendar week — it moves on whether or not a
+     stocktake has been entered, and the header says how far behind the count is */
+  const thisWeek=monday(new Date());
+  if(wkDiff(S.config.currentWeek,thisWeek)>0){ S.config.currentWeek=thisWeek; saveConfig(); }
+  syncHistoryFromStocktakes(false);
   render();
   if(b&&b.kind==="rest") checkSeedVersion().then(meta=>{
     if(meta){ S.seedUpdate=meta; render(); }
@@ -422,6 +450,66 @@ function tail(sku,field,loc,w,n){
   return out;
 }
 function avgOf(sku,field,loc,w,n){const t=tail(sku,field,loc,w,n);return t.length?sum(t)/t.length:0;}
+
+/* ---- writing actuals back into the weekly history ---- */
+function histInsertWeek(h,wk){
+  let i=h.weeks.findIndex(w=>w>wk); if(i<0) i=h.weeks.length;
+  h.weeks.splice(i,0,wk);
+  for(const f of ["out","soh","used"])
+    for(const k of Object.keys(h[f]||{})) h[f][k].splice(i,0,null);
+  for(const k of Object.keys(h.stockIn||{})) h.stockIn[k].splice(i,0,null);
+  h._ix=null; H(h.id);
+  return i;
+}
+function histSet(sku,field,locId,wk,val){
+  const h=H(sku);
+  let i=h._ix[wk];
+  if(i==null) i=histInsertWeek(h,wk);
+  h[field]=h[field]||{};
+  const n=h.weeks.length;
+  if(!h[field][locId]) h[field][locId]=new Array(n).fill(null);
+  while(h[field][locId].length<n) h[field][locId].push(null);
+  h[field][locId][i]=val;
+  return h;
+}
+/* A distributor's drawdown is never counted, it's what the movement implies:
+   what they held last week, plus whatever landed, less what they hold now. */
+function deriveUsed(sku,locId,wk){
+  const l=L(locId); if(!l||(l.type!=="distributor"&&l.type!=="retail")) return false;
+  const kS=histLoc(sku,"soh",locId), kO=histLoc(sku,"out",locId);
+  const now=at(sku,"soh",kS,wk), prev=at(sku,"soh",kS,wkAdd(wk,-1));
+  if(now==null||prev==null) return false;
+  const lead=Math.max(0,l.leadTimeWeeks||0);
+  const arriving=at(sku,"out",kO,wkAdd(wk,-lead))||0;
+  histSet(sku,"used",locId,wk,Math.round((prev+arriving-now)*100)/100);
+  return true;
+}
+/* Stocktakes are the stock-on-hand record; fold them into the history so the
+   forecast's own series stay current without anyone retyping them. */
+function syncHistoryFromStocktakes(save){
+  const touched=new Set();
+  for(const st of S.stock){
+    const by={};
+    for(const e of (st.entries||[])){
+      const k=skuId(e.productId,e.pack)+"|"+e.locationId;
+      by[k]=(by[k]||0)+(e.qty||0);
+    }
+    for(const k of Object.keys(by)){
+      const [sku,loc]=k.split("|");
+      if(!S.hist[sku]&&!skus().some(x=>x.id===sku)) continue;
+      const cur=at(sku,"soh",histLoc(sku,"soh",loc),st.weekStart);
+      if(cur===by[k]) continue;
+      histSet(sku,"soh",loc,st.weekStart,by[k]);
+      touched.add(sku);
+    }
+  }
+  for(const sku of touched)
+    for(const l of activeLocs()) for(const st of S.stock) deriveUsed(sku,l.id,st.weekStart);
+  if(save) for(const sku of touched) persist("history",stripIx(S.hist[sku]));
+  if(touched.size) S.calcCache=null;
+  return touched;
+}
+const stripIx=h=>{const c=Object.assign({},h); delete c._ix; return c;};
 
 /* opening stock on hand for a sku at a location, from the latest stocktake */
 function openingSOH(sku,locId){
@@ -823,12 +911,16 @@ const ICONS={
  stocktake:'<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M9 8h6M9 12h6M9 16h3"/>',
  production:'<path d="M4 20V9l5 3V9l5 3V4l6 3v13z"/>',
  ageing:'<circle cx="12" cy="12" r="8"/><path d="M12 7v5l3 2"/>',
+ actuals:'<path d="M4 5h16v14H4z"/><path d="M4 10h16M9 10v9"/><path d="M12 14l2 2 4-4"/>',
+ review:'<path d="M4 19V5"/><path d="M4 19h16"/><path d="M8 15l4-6 3 3 4-6"/>',
  setup:'<path d="M4 6h16M4 12h16M4 18h16"/><circle cx="9" cy="6" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="8" cy="18" r="2"/>'};
 const VIEWS=[
  {id:"forecast",label:"Forecast",title:"Forecast",sub:"Projected stock on hand across the coldroom, distributors and channels"},
  {id:"stocktake",label:"Stocktake",title:"Weekly stocktake",sub:"Batch-level counts by location — the numbers everything else runs on"},
+ {id:"actuals",label:"Week actuals",title:"Week actuals",sub:"What actually shipped — stock on hand and drawdown fill themselves in"},
  {id:"production",label:"Production",title:"Production schedule",sub:"Planned packaging runs and the brew dates they imply"},
  {id:"ageing",label:"Aged stock",title:"Aged stock",sub:"Best before, send-by cut-offs and what needs moving"},
+ {id:"review",label:"Review",title:"Review",sub:"This year against the last two, and how well each forecast basis has held up"},
  {id:"setup",label:"Setup",title:"Setup",sub:"Products, packs, distributors and customer channels"}];
 
 function drawNav(){
@@ -851,12 +943,20 @@ function render(){
   $("#ttl").textContent=v.title;
   $("#sub").textContent=v.sub;
   $("#curWeek").textContent=fmtWY(S.config.currentWeek);
+  const st0=latestStocktake(), gap=st0?wkDiff(st0.weekStart,S.config.currentWeek):null;
+  const cw=$("#curWeek").parentNode;
+  let note=$("#stGap"); if(!note){note=el("div",{id:"stGap",class:"hint"});cw.append(note);}
+  note.textContent=!st0?"no stocktake yet"
+    :gap<=0?"counted this week"
+    :gap===1?"counted last week":("counted "+gap+" weeks ago");
+  note.style.color=gap>1?"var(--warn)":"var(--faint)";
   drawNav();
   const pane=clear($("#pane")), ctl=clear($("#topctl"));
   if(S.seedUpdate) pane.append(seedBanner());
   try{
-    ({forecast:viewForecast,stocktake:viewStocktake,production:viewProduction,
-      ageing:viewAgeing,setup:viewSetup}[S.view])(pane,ctl,v);
+    ({forecast:viewForecast,stocktake:viewStocktake,actuals:viewActuals,
+      production:viewProduction,ageing:viewAgeing,review:viewReview,
+      setup:viewSetup}[S.view])(pane,ctl,v);
   }catch(e){
     console.error(e);
     pane.append(el("div",{class:"card"},el("div",{class:"empty"},
@@ -1443,6 +1543,515 @@ function editRunsForWeek(sku,week){
     b.append(el("button",{class:"btn",type:"button",style:"align-self:flex-start",
       onclick:()=>{$("#dlg").close();newRun(sku,week);}},"Add another run"));
   });
+}
+</script>
+<script>
+"use strict";
+/* ============================ WEEK ACTUALS ============================
+   Each week there is exactly one thing nobody else can tell us: what we
+   actually shipped. Stock on hand comes from the stocktake, and a
+   distributor's drawdown falls out of the two together — so this screen asks
+   for shipments only, and fills the rest in. */
+
+let actWeek = null;
+function actualsWeek(){
+  if(actWeek) return actWeek;
+  return S.config.currentWeek;
+}
+function weekChoices(){
+  const set=new Set(S.stock.map(s=>s.weekStart));
+  for(let i=0;i<8;i++) set.add(wkAdd(S.config.currentWeek,-i));
+  return [...set].filter(w=>w<=S.config.currentWeek).sort().reverse().slice(0,16);
+}
+function actualOut(sku,locId,wk){ return at(sku,"out",histLoc(sku,"out",locId),wk); }
+
+function setActual(sku,locId,wk,val){
+  const v=num(val);
+  histSet(sku,"out",locId,wk,v);
+  /* a shipment changes the drawdown implied for the week it lands and the next */
+  const l=L(locId), lead=l?Math.max(0,l.leadTimeWeeks||0):0;
+  deriveUsed(sku,locId,wkAdd(wk,lead));
+  deriveUsed(sku,locId,wkAdd(wk,lead+1));
+  S.calcCache=null;
+  queueHistSave(sku);
+}
+let histTimer=null; const histDirty=new Set();
+function queueHistSave(sku){
+  histDirty.add(sku);
+  const chip=$("#actCount"); if(chip) chip.textContent=actualsProgress(actualsWeek());
+  clearTimeout(histTimer);
+  histTimer=setTimeout(()=>{
+    for(const s of histDirty) persist("history",stripIx(S.hist[s]));
+    histDirty.clear();
+  },700);
+}
+function actualsRows(wk){
+  const out=[];
+  for(const s of skus()){
+    if(s.product.forecast===false) continue;
+    const chans=channelsFor(s.id);
+    const locs=activeLocs().filter(l=>chans.has(l.id));
+    if(!locs.length) continue;
+    out.push({sku:s,locs});
+  }
+  return out;
+}
+function actualsProgress(wk){
+  let done=0,total=0;
+  for(const {sku,locs} of actualsRows(wk)) for(const l of locs){
+    total++; if(actualOut(sku.id,l.id,wk)!=null) done++;
+  }
+  return done+" of "+total+" filled in";
+}
+
+function viewActuals(pane,ctl){
+  const wk=actualsWeek();
+  ctl.append(sel(weekChoices().map(w=>[w,"w/c "+fmtWY(w)+(S.stock.some(s=>s.weekStart===w)?"":"  ·  no stocktake")]),
+    wk,{onchange:e=>{actWeek=e.target.value;render();}}));
+  ctl.append(el("button",{class:"btn",onclick:()=>{
+    const n=syncHistoryFromStocktakes(true);
+    flash(n.size?("Stock on hand and drawdown refreshed for "+n.size+" SKUs"):"Already up to date");
+    render();
+  }},"Recalculate from stocktakes"));
+
+  const st=S.stock.find(s=>s.weekStart===wk);
+  const t=el("div",{class:"tiles"});
+  const wkTile=tile("Week","w/c "+fmtWY(wk),"");
+  wkTile.lastChild.id="actCount"; wkTile.lastChild.textContent=actualsProgress(wk);
+  t.append(wkTile);
+  t.append(tile("Stocktake",st?"counted":"not counted",
+    st?(st.entries||[]).length+" batch lines":"Stock on hand can't be worked out",st?"good":"warn"));
+  const runs=S.runs.filter(r=>monday(r.packDate)===wk&&r.status!=="cancelled");
+  t.append(tile("Packaged this week",String(runs.length)+(runs.length===1?" run":" runs"),
+    runs.length?runs.map(r=>(P(r.productId)||{}).name).filter((v,i,a)=>a.indexOf(v)===i).join(", "):"Nothing scheduled"));
+  let shipped=0; for(const {sku,locs} of actualsRows(wk)) for(const l of locs)
+    shipped+=actualOut(sku.id,l.id,wk)||0;
+  t.append(tile("Shipped out",n0(shipped),"Across every channel"));
+  pane.append(t);
+
+  pane.append(el("div",{class:"note"},el("b",{},"What to fill in. "),
+    "Only what left the brewery — one figure per channel. Stock on hand comes from the week's ",
+    "stocktake, and each distributor's drawdown is worked out from it: what they held last week, ",
+    "plus whatever landed, less what they hold now. Those two columns fill themselves."));
+
+  if(!st) pane.append(el("div",{class:"card"},el("div",{class:"body"},
+    el("div",{class:"note",style:"border-color:var(--warn)"},
+      el("b",{},"No stocktake for this week yet. "),
+      "You can still record shipments, but their stock on hand and drawdown stay blank until the count is in."))));
+
+  for(const {sku,locs} of actualsRows(wk)){
+    const c=el("div",{class:"card"});
+    const anyFilled=locs.some(l=>actualOut(sku.id,l.id,wk)!=null);
+    c.append(el("header",{},el("h3",{},sku.product.name," ",el("span",{class:"dim"},sku.pack)),
+      el("span",{class:"chip "+(anyFilled?"ok":"")},
+        locs.filter(l=>actualOut(sku.id,l.id,wk)!=null).length+" of "+locs.length),
+      el("span",{style:"flex:1"}),
+      el("span",{class:"hint"},"coldroom "+n0(at(sku.id,"soh","coldroom",wk))||"")));
+    const w=el("div",{class:"scroll"}), tb=el("table");
+    tb.append(el("thead",{},el("tr",{},el("th",{},"Channel"),el("th",{},"Type"),
+      el("th",{class:"num"},"Shipped out"),el("th",{class:"num"},"Their SOH"),
+      el("th",{class:"num"},"Drawdown"),el("th",{class:"num"},"Same week last year"))));
+    const body=el("tbody");
+    for(const l of locs){
+      const tracks=(l.type==="distributor"||l.type==="retail");
+      const cur=actualOut(sku.id,l.id,wk);
+      const soh=tracks?at(sku.id,"soh",histLoc(sku.id,"soh",l.id),wk):null;
+      const used=tracks?at(sku.id,"used",histLoc(sku.id,"used",l.id),wk):null;
+      const ly=actualOut(sku.id,l.id,wkAdd(wk,-52));
+      const inp=el("input",{class:"cellinp num qty",type:"text",inputmode:"decimal",
+        value:cur!=null?n0(cur):"", placeholder:"—",
+        onfocus:e=>e.target.select(), onkeydown:e=>stepCell(e),
+        onchange:e=>{setActual(sku.id,l.id,wk,e.target.value);render();}});
+      body.append(el("tr",{"data-zero":String(cur==null)},
+        el("td",{},el("b",{},l.name)),
+        el("td",{class:"dim"},LOCTYPE[l.type]),
+        el("td",{class:"cell"},inp),
+        el("td",{class:"num "+(soh==null?"dim":"")},soh==null?"—":n0(soh)),
+        el("td",{class:"num "+(used==null?"dim":"")},used==null?"—":n0(used)),
+        el("td",{class:"num dim"},ly==null?"—":n0(ly))));
+    }
+    tb.append(body); w.append(tb); c.append(w); pane.append(c);
+  }
+
+  if(runs.length){
+    const rc=el("div",{class:"card"});
+    rc.append(el("header",{},el("h3",{},"Packaged this week"),
+      el("span",{class:"hint"},"Mark a run confirmed once it's actually been packed")));
+    const w=el("div",{class:"scroll"}), tb=el("table");
+    tb.append(el("thead",{},el("tr",{},el("th",{},"Pack date"),el("th",{},"Product"),
+      el("th",{},"Pack"),el("th",{class:"num"},"Units"),el("th",{},"Status"),el("th",{},""))));
+    const body=el("tbody");
+    for(const r of runs.sort((a,b)=>a.packDate<b.packDate?-1:1)){
+      body.append(el("tr",{class:"stripe "+(r.status==="confirmed"?"ok":"warn")},
+        el("td",{class:"mono"},fmtD(r.packDate)),
+        el("td",{},(P(r.productId)||{name:r.productId}).name),
+        el("td",{class:"dim"},r.pack),
+        el("td",{class:"num"},n0(r.units)),
+        el("td",{},el("span",{class:"chip "+(r.status==="confirmed"?"ok":"warn")},r.status||"planned")),
+        el("td",{},r.status==="confirmed"
+          ?el("button",{class:"btn sm",onclick:()=>{r.status="planned";persist("runs",r);render();}},"Unconfirm")
+          :el("button",{class:"btn sm",onclick:()=>{r.status="confirmed";persist("runs",r);render();}},"Confirm"))));
+    }
+    tb.append(body); w.append(tb); rc.append(w); pane.append(rc);
+  }
+}
+</script>
+<script>
+"use strict";
+/* ============================ line chart ============================
+   Small SVG line chart: 2px marks, recessive grid, direct labels at the right
+   edge, legend above, and a crosshair tooltip. Text takes ink tokens, never a
+   series colour — the swatch beside it carries identity. */
+
+const VIZ = {
+  slot: ["--viz-1", "--viz-2", "--viz-3"],
+  of(i){ return "var(" + VIZ.slot[i % VIZ.slot.length] + ")"; }
+};
+const svgEl=(t,a)=>{const n=document.createElementNS("http://www.w3.org/2000/svg",t);
+  for(const k in (a||{})) if(a[k]!=null) n.setAttribute(k,a[k]); return n;};
+
+function niceTicks(lo,hi,n){
+  if(hi===lo){ hi=lo+1; }
+  const raw=(hi-lo)/n, mag=Math.pow(10,Math.floor(Math.log10(raw)));
+  const step=[1,2,2.5,5,10].map(m=>m*mag).find(s=>s>=raw)||mag*10;
+  const out=[]; for(let v=Math.floor(lo/step)*step; v<=hi+1e-9; v+=step) out.push(v);
+  return out;
+}
+
+/* series: [{name, values:[n|null], dash}]  x: [labels]  */
+function lineChart(opts){
+  const S_=opts.series.filter(s=>s.values.some(v=>v!=null));
+  const wrap=el("figure",{class:"viz"});
+  if(opts.title) wrap.append(el("figcaption",{},opts.title,
+    opts.note?el("span",{class:"hint"}," "+opts.note):null));
+  if(S_.length>1){
+    const lg=el("div",{class:"viz-legend"});
+    S_.forEach((s,i)=>lg.append(el("span",{class:"viz-key"},
+      el("i",{style:"background:"+VIZ.of(i)+(s.dash?";opacity:.85":"")}),s.name)));
+    wrap.append(lg);
+  }
+  const W=760,Hh=250,L=56,R=152,T=20,B=30;
+  const all=S_.flatMap(s=>s.values).filter(v=>v!=null);
+  const lo=Math.min(0,...all), hi=Math.max(1,...all);
+  const ticks=niceTicks(lo,hi,4), yMax=ticks[ticks.length-1], yMin=ticks[0];
+  const n=opts.x.length;
+  const px=i=>L+(n<2?0:i*(W-L-R)/(n-1));
+  const py=v=>T+(Hh-T-B)*(1-(v-yMin)/(yMax-yMin||1));
+  const svg=svgEl("svg",{viewBox:"0 0 "+W+" "+Hh,class:"viz-svg",
+    role:"img","aria-label":opts.title||"chart",preserveAspectRatio:"xMidYMid meet"});
+
+  for(const t of ticks){
+    svg.append(svgEl("line",{x1:L,x2:W-R,y1:py(t),y2:py(t),class:"viz-grid"}));
+    const lb=svgEl("text",{x:L-8,y:py(t)+4,class:"viz-axis","text-anchor":"end"});
+    lb.textContent=n0(t); svg.append(lb);
+  }
+  const step=Math.max(1,Math.ceil(n/7));
+  const shown=[];
+  opts.x.forEach((lab,i)=>{
+    if(i%step&&i!==n-1) return;
+    if(shown.length&&px(i)-shown[shown.length-1]<48) return;   /* no collisions */
+    shown.push(px(i));
+    const t=svgEl("text",{x:px(i),y:Hh-10,class:"viz-axis","text-anchor":"middle"});
+    t.textContent=lab; svg.append(t);
+  });
+
+  const ends=[];
+  S_.forEach((s,i)=>{
+    const pts=[];
+    s.values.forEach((v,k)=>{ if(v!=null) pts.push(px(k)+","+py(v)); });
+    if(!pts.length) return;
+    svg.append(svgEl("polyline",{points:pts.join(" "),fill:"none",stroke:VIZ.of(i),
+      "stroke-width":2,"stroke-linejoin":"round","stroke-linecap":"round",
+      "stroke-dasharray":s.dash||null}));
+    let last=-1; s.values.forEach((v,k)=>{ if(v!=null) last=k; });
+    if(last>=0){
+      svg.append(svgEl("circle",{cx:px(last),cy:py(s.values[last]),r:4,
+        fill:VIZ.of(i),stroke:"var(--surface)","stroke-width":2}));
+      ends.push({i,x:px(last),y:py(s.values[last]),
+                 text:s.name+"  "+n0(s.values[last])});
+    }
+  });
+  ends.sort((a,b)=>a.y-b.y);
+  const topY=T+6, botY=Hh-B-4;
+  ends.forEach((e,k)=>{
+    let y=Math.max(topY,Math.min(botY,e.y+4));
+    if(k&&y-ends[k-1]._y<15) y=ends[k-1]._y+15;
+    e._y=Math.min(botY,y);
+    const t=svgEl("text",{x:e.x+9,y:e._y,class:"viz-label"});
+    t.textContent=e.text; svg.append(t);
+  });
+
+  const cross=svgEl("line",{x1:0,x2:0,y1:T,y2:Hh-B,class:"viz-cross",opacity:0});
+  svg.append(cross);
+  const hit=svgEl("rect",{x:L,y:T,width:Math.max(1,W-L-R),height:Hh-T-B,
+    fill:"transparent",style:"cursor:crosshair"});
+  svg.append(hit);
+  const tip=el("div",{class:"viz-tip",hidden:true});
+  const box=el("div",{class:"viz-plot"},svg,tip);
+  hit.addEventListener("mousemove",ev=>{
+    const r=svg.getBoundingClientRect();
+    const xv=(ev.clientX-r.left)/r.width*W;
+    let i=Math.round((xv-L)/((W-L-R)/Math.max(1,n-1)));
+    i=Math.max(0,Math.min(n-1,i));
+    cross.setAttribute("x1",px(i)); cross.setAttribute("x2",px(i));
+    cross.setAttribute("opacity",1);
+    clear(tip); tip.hidden=false;
+    tip.append(el("b",{},opts.x[i]));
+    S_.forEach((s,k)=>{ if(s.values[i]==null) return;
+      tip.append(el("div",{class:"viz-tiprow"},
+        el("i",{style:"background:"+VIZ.of(k)}),
+        el("span",{},s.name),el("b",{},n0(s.values[i]))));});
+    const leftPct=(px(i)/W)*100;
+    tip.style.left=Math.min(78,Math.max(2,leftPct))+"%";
+  });
+  hit.addEventListener("mouseleave",()=>{cross.setAttribute("opacity",0);tip.hidden=true;});
+  wrap.append(box);
+  return wrap;
+}
+</script>
+<script>
+"use strict";
+/* ============================ REVIEW ============================
+   Two questions: are we shipping more or less than the last two years, and
+   which forecast basis has actually been predicting us well. Both read the
+   same weekly history the forecast runs on. */
+
+let revSku = null, revWeeks = 52, revTab = "yoy";
+
+function reviewSkus(){
+  return skus().filter(s=>S.hist[s.id]&&s.product.forecast!==false);
+}
+function reviewSku(){
+  const list=reviewSkus();
+  if(revSku&&list.some(s=>s.id===revSku)) return revSku;
+  return list.length?list[0].id:null;
+}
+/* the last week that is actually over — this week is still being shipped */
+const lastFullWeek = () => wkAdd(S.config.currentWeek,-1);
+const outAt = (sku,loc,wk) => at(sku,"out",histLoc(sku,"out",loc),wk);
+
+function periodWeeks(endWk,n){
+  const out=[]; for(let i=n-1;i>=0;i--) out.push(wkAdd(endWk,-i));
+  return out;
+}
+function periodTotal(sku,loc,endWk,n){
+  let t=0,seen=false;
+  for(const w of periodWeeks(endWk,n)){
+    const v=outAt(sku,loc,w);
+    if(v!=null){ t+=v; seen=true; }
+  }
+  return seen?t:null;
+}
+function reviewChannels(sku){
+  return activeLocs().filter(l=>[0,52,104].some(off=>
+    (periodTotal(sku,l.id,wkAdd(lastFullWeek(),-off),revWeeks)||0)>0));
+}
+const pctChange=(now,then)=>(then?((now-then)/then*100):null);
+
+function viewReview(pane,ctl){
+  const list=reviewSkus();
+  if(!list.length){
+    pane.append(el("div",{class:"card"},el("div",{class:"empty"},
+      el("b",{},"Nothing to review yet"),"Once there's a season of shipments behind you this fills in.")));
+    return;
+  }
+  const sku=reviewSku();
+  ctl.append(sel(list.map(s=>[s.id,s.product.name+" "+s.pack]),sku,
+    {onchange:e=>{revSku=e.target.value;render();}}));
+  ctl.append(sel([[52,"52 weeks"],[26,"26 weeks"],[13,"13 weeks"]],revWeeks,
+    {onchange:e=>{revWeeks=+e.target.value;render();}}));
+  const seg=el("div",{class:"packtabs"});
+  for(const [k,lab] of [["yoy","Year on year"],["acc","Forecast accuracy"]])
+    seg.append(el("button",{"aria-pressed":String(revTab===k),
+      onclick:()=>{revTab=k;render();}},lab));
+  ctl.append(seg);
+  (revTab==="yoy"?reviewYoY:reviewAccuracy)(pane,sku);
+}
+
+/* ---------------- year on year ---------------- */
+function reviewYoY(pane,sku){
+  const end=lastFullWeek(), chans=reviewChannels(sku);
+  const s=skus().find(x=>x.id===sku);
+  const unit=(PACK_UNIT[s.pack]||"units").toLowerCase();
+  const tot=[0,52,104].map(off=>
+    chans.reduce((a,l)=>a+(periodTotal(sku,l.id,wkAdd(end,-off),revWeeks)||0),0));
+  const d1=pctChange(tot[0],tot[1]), d2=pctChange(tot[0],tot[2]);
+
+  const t=el("div",{class:"tiles"});
+  t.append(tile("Shipped, last "+revWeeks+" weeks",n0(tot[0]),unit+" to "+fmtD(end)));
+  t.append(tile("Same period last year",n0(tot[1]),
+    d1==null?"—":(d1>=0?"+":"")+d1.toFixed(0)+"% this year",d1==null?"":d1>=0?"good":"alert"));
+  t.append(tile("Two years ago",n0(tot[2]),
+    d2==null?"—":(d2>=0?"+":"")+d2.toFixed(0)+"% this year",d2==null?"":d2>=0?"good":"alert"));
+  const moves=chans.map(l=>({l,now:periodTotal(sku,l.id,end,revWeeks)||0,
+    then:periodTotal(sku,l.id,wkAdd(end,-52),revWeeks)||0}))
+    .map(x=>Object.assign(x,{diff:x.now-x.then}));
+  const up=moves.slice().sort((a,b)=>b.diff-a.diff)[0];
+  const dn=moves.slice().sort((a,b)=>a.diff-b.diff)[0];
+  if(up) t.append(tile("Biggest gain",up.l.name,(up.diff>=0?"+":"")+n0(up.diff)+" "+unit,"good"));
+  if(dn) t.append(tile("Biggest fall",dn.l.name,n0(dn.diff)+" "+unit,"alert"));
+  pane.append(t);
+
+  /* cumulative is the honest shape here — the gap at the right edge is the answer */
+  const labels=periodWeeks(end,revWeeks).map(w=>fmtW(w));
+  const series=[["This year",0],["Last year",52],["Two years ago",104]].map(([name,off])=>{
+    let run=0, started=false;
+    return {name,values:periodWeeks(wkAdd(end,-off),revWeeks).map(w=>{
+      let week=0,any=false;
+      for(const l of chans){ const v=outAt(sku,l.id,w); if(v!=null){week+=v;any=true;} }
+      if(any) started=true;
+      run+=week; return started?run:null; })};
+  });
+  const c=el("div",{class:"card"});
+  c.append(el("header",{},el("h3",{},"Shipped out, running total")));
+  const body=el("div",{class:"body"});
+  body.append(lineChart({title:s.product.name+" "+s.pack+" — cumulative "+unit+" shipped",
+    note:"each line runs "+revWeeks+" weeks to the same point in its year",
+    x:labels,series}));
+  c.append(body); pane.append(c);
+
+  const tc=el("div",{class:"card"});
+  tc.append(el("header",{},el("h3",{},"By distributor and channel"),
+    el("span",{class:"hint"},revWeeks+" weeks to "+fmtD(end))));
+  const w=el("div",{class:"scroll"}), tb=el("table");
+  tb.append(el("thead",{},el("tr",{},el("th",{},"Channel"),el("th",{},"Type"),
+    el("th",{class:"num"},"This year"),el("th",{class:"num"},"Last year"),
+    el("th",{class:"num"},"Two years ago"),el("th",{class:"num"},"vs last year"),
+    el("th",{class:"num"},"vs two years"),el("th",{},"Share"))));
+  const bd=el("tbody");
+  const rows=chans.map(l=>({l,v:[0,52,104].map(off=>periodTotal(sku,l.id,wkAdd(end,-off),revWeeks)||0)}))
+    .sort((a,b)=>b.v[0]-a.v[0]);
+  const top=rows.length?Math.max(...rows.map(r=>r.v[0])):1;
+  for(const {l,v} of rows){
+    const a=pctChange(v[0],v[1]), b2=pctChange(v[0],v[2]);
+    const pc=x=>x==null?el("td",{class:"num dim"},"—")
+      :el("td",{class:"num",style:"color:"+(x>=0?"var(--ok)":"var(--crit)")},
+         (x>=0?"+":"")+x.toFixed(0)+"%");
+    bd.append(el("tr",{},
+      el("td",{},el("b",{},l.name)),
+      el("td",{class:"dim"},LOCTYPE[l.type]),
+      el("td",{class:"num"},n0(v[0])),
+      el("td",{class:"num dim"},n0(v[1])),
+      el("td",{class:"num dim"},n0(v[2])),
+      pc(a),pc(b2),
+      el("td",{},el("div",{class:"bar"},el("i",{style:"width:"+(top?v[0]/top*100:0)+"%"})))));
+  }
+  bd.append(el("tr",{class:"tot"},
+    el("td",{},el("b",{},"Total")),el("td",{}),
+    el("td",{class:"num"},el("b",{},n0(tot[0]))),
+    el("td",{class:"num"},n0(tot[1])),el("td",{class:"num"},n0(tot[2])),
+    d1==null?el("td",{}):el("td",{class:"num",style:"color:"+(d1>=0?"var(--ok)":"var(--crit)")},
+      (d1>=0?"+":"")+d1.toFixed(0)+"%"),
+    d2==null?el("td",{}):el("td",{class:"num",style:"color:"+(d2>=0?"var(--ok)":"var(--crit)")},
+      (d2>=0?"+":"")+d2.toFixed(0)+"%"),
+    el("td",{})));
+  tb.append(bd); w.append(tb); tc.append(w); pane.append(tc);
+}
+
+/* ---------------- how well each basis has predicted ---------------- */
+function predictions(sku,loc,wk,avgWin){
+  const py=outAt(sku,loc,wkAdd(wk,-52));
+  const hist=[]; for(let i=1;i<=avgWin;i++){
+    const v=outAt(sku,loc,wkAdd(wk,-i)); if(v!=null) hist.push(v);
+  }
+  const ra=hist.length?hist.reduce((a,b)=>a+b,0)/hist.length:null;
+  return {prior_year:py,recent_avg:ra};
+}
+function accuracyFor(sku,loc,n,avgWin){
+  const end=lastFullWeek(); let act=0,nw=0;
+  const err={prior_year:0,recent_avg:0}, cnt={prior_year:0,recent_avg:0};
+  const pred={prior_year:0,recent_avg:0};
+  for(const w of periodWeeks(end,n)){
+    const a=outAt(sku,loc,w); if(a==null) continue;
+    act+=a; nw++;
+    const p=predictions(sku,loc,w,avgWin);
+    for(const k of ["prior_year","recent_avg"]){
+      if(p[k]==null) continue;
+      pred[k]+=p[k]; err[k]+=Math.abs(p[k]-a); cnt[k]++;
+    }
+  }
+  if(!nw) return null;
+  const mk=k=>cnt[k]?{total:pred[k],mae:err[k]/cnt[k],
+    bias:act?((pred[k]-act)/act*100):null,weeks:cnt[k]}:null;
+  return {actual:act,weeks:nw,prior_year:mk("prior_year"),recent_avg:mk("recent_avg")};
+}
+
+function reviewAccuracy(pane,sku){
+  const s=skus().find(x=>x.id===sku), end=lastFullWeek();
+  const win=S.config.avgWindow||8, chans=reviewChannels(sku);
+  const unit=(PACK_UNIT[s.pack]||"units").toLowerCase();
+  const agg={actual:0,prior_year:{total:0,err:0,n:0},recent_avg:{total:0,err:0,n:0}};
+  const per=[];
+  for(const l of chans){
+    const a=accuracyFor(sku,l.id,revWeeks,win); if(!a) continue;
+    per.push({l,a}); agg.actual+=a.actual;
+    for(const k of ["prior_year","recent_avg"]) if(a[k]){
+      agg[k].total+=a[k].total; agg[k].err+=a[k].mae*a[k].weeks; agg[k].n+=a[k].weeks;
+    }
+  }
+  const mae=k=>agg[k].n?agg[k].err/agg[k].n:null;
+  const better=(mae("prior_year")==null||mae("recent_avg")==null)?null
+    :(mae("prior_year")<=mae("recent_avg")?"prior_year":"recent_avg");
+
+  const t=el("div",{class:"tiles"});
+  t.append(tile("Actually shipped",n0(agg.actual),unit+", last "+revWeeks+" weeks"));
+  for(const k of ["prior_year","recent_avg"]){
+    const bias=agg.actual?((agg[k].total-agg.actual)/agg.actual*100):null;
+    t.append(tile(BASES[k],mae(k)==null?"—":n0(mae(k))+"/wk",
+      bias==null?"average miss":"would have been "+(bias>=0?"+":"")+bias.toFixed(0)+"% over the period",
+      better===k?"good":""));
+  }
+  t.append(tile("Closer over this period",better?BASES[better]:"—",
+    better?"on average weekly error":"not enough history"));
+  pane.append(t);
+
+  pane.append(el("div",{class:"note"},el("b",{},"How to read this. "),
+    "Each past week is re-predicted from what was known before it — same week last year, ",
+    "or the ",win,"-week average running into it — and compared with what actually shipped. ",
+    "The basis with the smaller average weekly miss is the one worth trusting for this SKU. ",
+    "Set it per channel on the Forecast screen."));
+
+  const wks=periodWeeks(end,Math.min(revWeeks,26));
+  const sum=(f)=>wks.map(w=>{
+    let t2=0,any=false;
+    for(const l of chans){ const v=f(l.id,w); if(v!=null){t2+=v;any=true;} }
+    return any?t2:null;});
+  const c=el("div",{class:"card"});
+  c.append(el("header",{},el("h3",{},"Week by week, predicted against actual")));
+  const body=el("div",{class:"body"});
+  body.append(lineChart({title:s.product.name+" "+s.pack+" — "+unit+" shipped per week",
+    note:"predictions use only what was known before each week",
+    x:wks.map(w=>fmtW(w)),
+    series:[
+      {name:"Actual",values:sum((l,w)=>outAt(sku,l,w))},
+      {name:"Prior year",dash:"5 4",values:sum((l,w)=>predictions(sku,l,w,win).prior_year)},
+      {name:"Recent average",dash:"2 4",values:sum((l,w)=>predictions(sku,l,w,win).recent_avg)}
+    ]}));
+  c.append(body); pane.append(c);
+
+  const tc=el("div",{class:"card"});
+  tc.append(el("header",{},el("h3",{},"Which basis fits each channel"),
+    el("span",{class:"hint"},"average weekly miss over "+revWeeks+" weeks")));
+  const w2=el("div",{class:"scroll"}), tb=el("table");
+  tb.append(el("thead",{},el("tr",{},el("th",{},"Channel"),el("th",{class:"num"},"Shipped"),
+    el("th",{class:"num"},"Prior year miss"),el("th",{class:"num"},"Recent average miss"),
+    el("th",{},"Closer"),el("th",{},"Set to"))));
+  const bd=el("tbody");
+  for(const {l,a} of per.sort((x,y)=>y.a.actual-x.a.actual)){
+    const p=a.prior_year,r=a.recent_avg;
+    const best=(p&&r)?(p.mae<=r.mae?"prior_year":"recent_avg"):(p?"prior_year":r?"recent_avg":null);
+    const cur=(planOf(sku).basis||{})[l.id]||S.config.defaultDrawBasis;
+    bd.append(el("tr",{class:"stripe "+(best&&cur!==best?"warn":"")},
+      el("td",{},el("b",{},l.name)),
+      el("td",{class:"num"},n0(a.actual)),
+      el("td",{class:"num"+(best==="prior_year"?"":" dim")},p?n0(p.mae)+"/wk":"—"),
+      el("td",{class:"num"+(best==="recent_avg"?"":" dim")},r?n0(r.mae)+"/wk":"—"),
+      el("td",{},best?el("span",{class:"chip ok"},BASES[best]):el("span",{class:"dim"},"—")),
+      el("td",{},cur===best||!best?el("span",{class:"chip"},BASES[cur]||cur)
+        :el("button",{class:"btn sm",onclick:()=>{setBasis(sku,l.id,best);
+            flash(l.name+" set to "+BASES[best]);}},"Use "+BASES[best].toLowerCase()))));
+  }
+  tb.append(bd); w2.append(tb); tc.append(w2); pane.append(tc);
 }
 </script>
 <script>

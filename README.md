@@ -122,6 +122,22 @@ Taken from the conventions in the original sheet:
   a batch can go to a distributor with half its life left. Shelf life is per
   product per pack in Setup, defaulting to 12 months for cans and 6 for kegs.
 
+## Review
+
+**Year on year** puts the last 52 weeks against the same 52 weeks a year and two
+years before — a running total so the gap at the right edge is the answer, then a
+table of every distributor and channel with the change against each. Periods end
+at the last *full* week, so a part-shipped current week never flatters the
+comparison.
+
+**Forecast accuracy** re-predicts each past week from only what was known before
+it — the same week a year earlier, or the trailing 8-week average running into it
+— and compares both with what actually shipped. The average weekly miss per
+channel says which basis is worth trusting for that SKU, with a button to set it.
+
+Both read the same weekly history the forecast runs on, so they get better as
+Week actuals is kept up.
+
 ## Setting a SKU up
 
 Each SKU's header on the Forecast screen has a **channels** button. It opens the
@@ -145,6 +161,26 @@ beer doesn't mean setting up every distributor again. A SKU with no channels
 yet says so in the grid, with a button to pick them.
 
 ## The weekly routine
+
+**Monday.** Stocktake first — *Stocktake -> New stocktake*, pick the week, start
+from last week's batches with quantities cleared, and count. Then **Week
+actuals**: one figure per channel for what actually left the brewery. That is
+the only thing the app can't work out for itself.
+
+Stock on hand comes from the stocktake, and each distributor's drawdown falls
+out of the two together — what they held last week, plus whatever landed that
+week, less what they hold now. Both columns fill themselves and are shown beside
+your entry so the arithmetic is visible. **Recalculate from stocktakes** redoes
+them for every week if a count is corrected after the fact.
+
+Those figures land in the same weekly history the forecast reads, so prior year
+and recent average keep working from the app's own record rather than needing
+another export from the sheet.
+
+The week commencing shown bottom-left is the real calendar week and moves on by
+itself every Monday; underneath it says how long ago stock was last counted.
+
+## Older notes on the routine
 
 **Stocktake → New stocktake**, set the week, and choose *Last stocktake's
 batches (qty cleared)*. Every line comes through with its batch number and
