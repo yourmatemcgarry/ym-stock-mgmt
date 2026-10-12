@@ -208,6 +208,8 @@ tbody tr:last-child td{border-bottom:0}
 .fg td.neg{background:var(--crit-soft);color:var(--crit);font-weight:600}
 .fg td.low{background:var(--warn-soft);color:var(--warn);font-weight:600}
 .fg td.inp{padding:0}
+.fg td.inp.now{background:var(--accent-soft)}
+.fg td.inp.now input{background:transparent}
 .fg td.inp input{width:100%;border:0;background:transparent;text-align:right;padding:5px 8px;
   font-family:var(--mono);font-size:12px;border-radius:0}
 .fg td.inp input:focus{background:var(--accent-soft);outline:1px solid var(--accent)}
@@ -855,7 +857,12 @@ function compute(sku){
   const totalShip=weeks.map((_,k)=>sum(rows.map(r=>r.ship[k]||0)));
   const beerIn=beerInFor(sku,weeks);
   const openCold=openingSOH(sku,"coldroom");
-  const cold=[]; let c=openCold;
+  /* The coldroom is counted on Monday morning, so this week's packaging and this
+     week's shipments still sit between the count and the first forecast week.
+     Leave them out and every projection runs a week flattering. */
+  const inNow=beerInFor(sku,[cw])[0]||0;
+  const outNow=sum(activeLocs().map(l=>at(sku,"out",histLoc(sku,"out",l.id),cw)||0));
+  const cold=[]; let c=openCold+inNow-outNow;
   for(let k=0;k<weeks.length;k++){ c=c+beerIn[k]-totalShip[k]; cold.push(c); }
   const wkAvg=sum(totalShip)/Math.max(1,totalShip.length);
   const cover=cold.map(v=>wkAvg>0?v/wkAvg:null);
@@ -865,7 +872,8 @@ function compute(sku){
   const lead=(p&&p.brewToPackDays)||21;
   const brewBy=stockoutWeek?iso(new Date(D(stockoutWeek)-lead*DAY)):null;
   const surplusTarget=(p&&p.surplusTarget&&p.surplusTarget[sku.split("__").slice(1).join("__")])||null;
-  return {sku,weeks,past,rows,totalShip,beerIn,cold,cover,openCold,stockoutWeek,brewBy,wkAvg,surplusTarget,
+  return {sku,weeks,past,rows,totalShip,beerIn,cold,cover,openCold,inNow,outNow,
+    stockoutWeek,brewBy,wkAvg,surplusTarget,
     pastTotalOut:past.map(w=>sum(activeLocs().map(l=>at(sku,"out",histLoc(sku,"out",l.id),w)||0))),
     pastCold:past.map(w=>at(sku,"soh","coldroom",w)),
     pastIn:past.map(w=>at(sku,"stockIn","packaged",w))};
@@ -929,9 +937,9 @@ const ICONS={
  review:'<path d="M4 19V5"/><path d="M4 19h16"/><path d="M8 15l4-6 3 3 4-6"/>',
  setup:'<path d="M4 6h16M4 12h16M4 18h16"/><circle cx="9" cy="6" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="8" cy="18" r="2"/>'};
 const VIEWS=[
- {id:"forecast",label:"Forecast",title:"Forecast",sub:"Projected stock on hand across the coldroom, distributors and channels"},
+ {id:"forecast",label:"Forecast",title:"Forecast",sub:"Monday afternoon: what's going out this week, and the weeks after it"},
  {id:"stocktake",label:"Stocktake",title:"Weekly stocktake",sub:"Batch-level counts by location — the numbers everything else runs on"},
- {id:"actuals",label:"Week actuals",title:"Week actuals",sub:"What actually shipped — stock on hand and drawdown fill themselves in"},
+ {id:"actuals",label:"Week actuals",title:"Week actuals",sub:"Monday morning: what shipped last week. Stock on hand and drawdown fill themselves in"},
  {id:"production",label:"Production",title:"Production schedule",sub:"Planned packaging runs and the brew dates they imply"},
  {id:"ageing",label:"Aged stock",title:"Aged stock",sub:"Best before, send-by cut-offs and what needs moving"},
  {id:"review",label:"Review",title:"Review",sub:"This year against the last two, and how well each forecast basis has held up"},
@@ -1130,7 +1138,8 @@ function skuGrid(s,c){
     lab.append(labrow);
     lab.title=r.loc.name+" — "+LOCTYPE[r.loc.type];
     tr1.append(lab);
-    (r.pastOut||[]).forEach((v,i)=>tr1.append(vcell(v,i)));
+    (r.pastOut||[]).forEach((v,i)=>tr1.append(
+      i===cwIdx?nowCell(s.id,r,c.past[i],v):vcell(v,i)));
     r.ship.forEach((v,i)=>tr1.append(shipCell(s.id,r,c.weeks[i],v)));
     tb.append(tr1);
     // their drawdown + SOH
@@ -1201,6 +1210,19 @@ function skuGrid(s,c){
       el("button",{class:"btn sm",style:"margin-left:6px",onclick:()=>newRun(s.id,c.brewBy)},"Schedule a run")));
   }
   return wrap;
+}
+/* The current week's column is a decision, not yet a fact. Monday morning last
+   week's actuals go in on the Week actuals screen; Monday afternoon this column
+   is where we say what's going out this week, and everything downstream moves
+   with it. It writes the same figure the actuals screen writes, so when the
+   week ends there is nothing to re-enter — only to correct. */
+function nowCell(sku,r,wk,v){
+  const td=el("td",{class:"v inp now"+(v!=null?" edited":"")});
+  td.append(el("input",{type:"text",inputmode:"numeric",value:v==null?"":n0(v),
+    placeholder:"—",
+    title:"Going out to "+r.loc.name+" this week. Saved as the week's actual.",
+    onchange:e=>{setActual(sku,r.loc.id,wk,e.target.value);render();}}));
+  return td;
 }
 /* Every shipping figure can be typed over. Where it lands depends on how the
    location is replenished: an order plan, a known order against the auto top-up,
@@ -1551,7 +1573,10 @@ function editRunsForWeek(sku,week){
 let actWeek = null;
 function actualsWeek(){
   if(actWeek) return actWeek;
-  return S.config.currentWeek;
+  /* Monday morning the job is the week that just finished. This week is still a
+     decision — it gets made on the Forecast screen and only becomes an actual
+     once it's over. The picker still reaches this week for a correction. */
+  return wkAdd(S.config.currentWeek,-1);
 }
 function weekChoices(){
   const set=new Set(S.stock.map(s=>s.weekStart));

@@ -168,10 +168,24 @@ yet says so in the grid, with a button to pick them.
 
 ## The weekly routine
 
-**Monday.** Stocktake first — *Stocktake -> New stocktake*, pick the week, start
-from last week's batches with quantities cleared, and count. Then **Week
-actuals**: one figure per channel for what actually left the brewery. That is
-the only thing the app can't work out for itself.
+**Monday morning — what happened.** Stocktake first: *Stocktake -> New
+stocktake*, pick the week, start from last week's batches with quantities
+cleared, and count. Then **Week actuals**, which opens on *the week that just
+finished*: one figure per channel for what actually left the brewery. That is
+the only thing the app can't work out for itself. The week picker still reaches
+this week and the weeks before it if something needs correcting.
+
+**Monday afternoon — what's going out.** On **Forecast**, the current week is
+the tinted column between the history and the projection, and every shipping
+figure in it can be typed. Put in what's going out this week and the week after
+moves underneath it: a top-up distributor's stock on hand rises and next week's
+top-up falls by the same amount, while a chain's order comes straight out of the
+coldroom. Those figures are saved as that week's actuals, so come next Monday
+there is nothing to re-enter — only to correct where the week went differently.
+
+The coldroom balance accounts for this: the count is taken on Monday morning, so
+this week's packaging and this week's shipments are applied between the count
+and the first projected week.
 
 Stock on hand comes from the stocktake, and each distributor's drawdown falls
 out of the two together — what they held last week, plus whatever landed that
