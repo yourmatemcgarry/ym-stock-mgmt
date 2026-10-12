@@ -42,6 +42,11 @@ another week or cancelled does not linger and get counted twice. Anything
 created in the app — a stocktake entered here, a run scheduled from the
 Production tab — has an id of its own and is left alone.
 
+A data file can also retire a document by name, through a `remove` list of
+`{collection, id}` at the top level — that is how a channel merged into another
+leaves the site's store. Only the ids listed there are deleted, so a distributor
+added in the app is never caught up in it.
+
 The same control sits permanently under **Setup -> Data in this site**, with the
 date of the export the live data came from, so you can always tell which vintage
 you are looking at.
@@ -90,12 +95,17 @@ Collections: `config`, `products`, `locations`, `history`, `plan`,
 
 ## Where the data came from
 
-Everything was imported from the Stock Management Sheet as at 2 October 2026 and
-checked back against it cell by cell: 34,166 weekly history values, 136
-packaging runs and 921 stocktake lines, with no differences. Two row types in
+Everything was imported from the Stock Management Sheet and checked back against
+it cell by cell — at the latest refresh, 47,300 weekly history values, 135
+packaging runs and 1,499 stocktake lines, with no differences. Two row types in
 the sheet are deliberately not imported because they restate rows above them —
 the `Total` roll-up, and the `YM` drawdown row, which covers stock already
 counted under `YM Taproom`.
+
+`COLES QLD (10 Pk)` is the same customer in the same Larry Can units, so its
+rows are added into `COLES QLD` on the way in: one channel, holding the stock
+and the drawdown of both. The sheet still keeps them apart, and the import folds
+them every time, so nothing needs changing at that end.
 
 The sheet's forward `A - Stock Out` figures for the retail chains were brought
 across as their order plans, and for the direct channels as manual figures, so
@@ -111,15 +121,31 @@ Taken from the conventions in the original sheet:
 - Stock shipped in one week lands on a distributor's shelf **the following
   week**. The projection models that transit week; it's visible in the sheet's
   own numbers.
-- Each distributor's drawdown is forecast on one of three bases, switchable per
+- **Stock on hand** is what a distributor holds on the Monday morning of that
+  week. **Drawdown** against a week is what they went through the week before —
+  the sheet's own convention, and what the count each Monday measures.
+- Each distributor's drawdown is forecast on one of these bases, switchable per
   distributor in the forecast grid: **prior year**, **recent average** (default
-  8 weeks), or **manual**.
+  8 weeks), **manual** (only the weeks you type; the rest fall back to prior
+  year), **flat number**, or **like another SKU**. The drawdown row itself takes
+  typed figures, same as the shipping row.
+- **Flat number** is the quick one: type a figure into any forecast week and it
+  holds for every week after it, until another figure is typed over the top.
+  Weeks before the first entry keep the ordinary forecast, so a figure put
+  further out reads as a step change rather than rewriting everything in front
+  of it.
 - Replenishment is either **their order plan** — typed straight into the grid,
-  usually 13 weeks out — or **top up to a target stock level** in their
-  warehouse. Either way, **any shipping figure can be typed over**: on a
-  top-up location a typed figure is a known order and is used instead of the
-  calculated one for that week, and clearing the cell hands it back to the
-  calculation. Typed figures show in bold.
+  usually 13 weeks out — or **top up to a target stock level**: the week's
+  shipment is the target less what they are holding that week. Their stock then
+  rolls forward as last week's stock, plus whatever landed, less the week's
+  drawdown. Settled down that means we ship them roughly what they use each
+  week and they sit about one week's drawdown under the target, since the
+  shipment lands a week after the shortfall is measured — set the target to
+  include that week.
+- Either way, **any shipping figure can be typed over**: on a top-up location a
+  typed figure is a known order and is used instead of the calculated one for
+  that week, and clearing the cell hands it back to the calculation. Typed
+  figures show in bold.
 - The coldroom balance is opening stock, plus beer in from planned packaging
   runs, less everything shipped out. Where it goes negative, that's the
   stock-out week; the brew-by date works back from it using each product's

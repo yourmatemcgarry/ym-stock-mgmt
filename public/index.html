@@ -329,7 +329,12 @@ const PACKS=["Can","10 Pack","Keg","30L Keg"];
 const PACK_UNIT={"Can":"Cartons","10 Pack":"Cartons","Keg":"50L Kegs","30L Keg":"30L Kegs"};
 const PACK_SHELF={"Can":12,"10 Pack":12,"Keg":6,"30L Keg":6};
 const BASES={prior_year:"Prior year",recent_avg:"Recent average",manual:"Manual entry",
-             model:"Like another SKU",planned:"Distributor plan"};
+             flat:"Flat number",model:"Like another SKU",planned:"Distributor plan"};
+const BASIS_HINT={prior_year:"The same week a year ago",
+  recent_avg:"The average of the last few weeks",
+  manual:"Only the weeks you type; the rest fall back to prior year",
+  flat:"Type one figure and it holds every week after, until you type another",
+  model:"Follows another SKU's history",planned:"What the distributor has told us"};
 const LOCTYPE={distributor:"Distributor",retail:"Retail chain",direct:"Direct channel",internal:"Internal"};
 
 /* ============================ state ============================ */
@@ -627,6 +632,13 @@ async function importSeed(onProgress,seed){
       if(id.slice(0,6)==="sheet-"&&!keep.has(id)) await S.backend.del(kind,id);
     }
   }
+  /* Documents the data file explicitly retires — a channel merged into another,
+     say. They are named one at a time, so a distributor added on this site can
+     never be caught up in it. */
+  for(const r of (seed.remove||[])){
+    if(!r||!r.id||KINDS.indexOf(r.collection)<0) continue;
+    try{ await S.backend.del(r.collection,String(r.id)); }catch(e){}
+  }
   if(seed.meta){
     const cfg=Object.assign({},S.config,{id:"app",dataStamp:seed.meta.generated,
       dataSource:seed.meta.source});
@@ -724,8 +736,20 @@ function forecastSeries(sku,field,locKey,weeks,basis,manualMap,avgWin,locId){
   const cw=S.config.currentWeek;
   const avg=avgOf(sku,field,locKey,cw,avgWin);
   const ownHistory=tail(sku,field,locKey,cw,avgWin).length>0;
+  /* "Flat number": the last figure typed at or before this week holds, so one
+     entry carries forward for good until another is typed over the top of it.
+     Weeks before the first entry fall through to the normal bases below, which
+     keeps a figure typed further out reading as a step change, not a rewrite
+     of everything in front of it. */
+  const flatAt=w=>{
+    if(!manualMap) return null;
+    let bk=null;
+    for(const k in manualMap) if(k<=w&&manualMap[k]!=null&&(bk===null||k>bk)) bk=k;
+    return bk===null?null:manualMap[bk];
+  };
   const pick=w=>{
     if(basis==="manual"&&manualMap&&manualMap[w]!=null) return manualMap[w];
+    if(basis==="flat"){ const f=flatAt(w); if(f!=null) return f; }
     if(basis==="model"){ const m=modelAt(sku,field,locId,w); if(m!=null) return m; }
     if(basis==="recent_avg"&&ownHistory) return avg;
     const py=at(sku,field,locKey,wkAdd(w,-52));
@@ -836,14 +860,13 @@ function compute(sku){
       if(method==="planned"){ ship=num(planned[weeks[k]])||0; }
       else if(ov!=null){ ship=ov; }          /* we already know what's going */
       else {
-        /* project forward over the lead time, counting what's already in transit */
-        let p=soh;
-        for(let j=1;j<=lead;j++){
-          const inflight = (k+j-lead)>=0 ? (shipArr[k+j-lead]||0)
-            : (at(sku,"out",kOut,wkAdd(cw,1+k+j-lead))||0);
-          p = p + inflight - (draw[k+j]!=null?draw[k+j]:avgDraw);
-        }
-        if(p<target) ship=roundTo(target-p,mult);
+        /* Top up to target against what they are holding now: target less their
+           stock on hand this week, which is last week's stock plus whatever
+           landed, less the week's drawdown. The shipment still takes `lead`
+           weeks to arrive, so it lands against a week more drawdown — that gap
+           is what the target's cover is for, rather than something to inflate
+           the order with. */
+        if(soh<target) ship=roundTo(target-soh,mult);
       }
       sohArr.push(soh); shipArr.push(ship);
     }
@@ -1151,7 +1174,7 @@ function skuGrid(s,c){
       l2.append(el("div",{class:"lbl"},el("span",{style:"padding-left:22px;color:var(--muted)"},"Their drawdown"),bs));
       tr2.append(l2);
       (r.pastDraw||[]).forEach((v,i)=>tr2.append(vcell(v,i)));
-      r.draw.forEach((v,i)=>tr2.append(vcell(v,NP+i,"dim")));
+      r.draw.forEach((v,i)=>tr2.append(drawCell(s.id,r,c.weeks[i],v)));
       tb.append(tr2);
       const tr3=el("tr",{class:"r-soh"});
       const l3=el("td",{class:"stick"});
@@ -1211,6 +1234,29 @@ function skuGrid(s,c){
   }
   return wrap;
 }
+/* Their drawdown can be typed as well as forecast — it writes the same map the
+   direct channels use. A figure typed here switches the channel to manual
+   entry, unless it is already on a flat number, where one figure is meant to
+   carry forward on its own. */
+function drawCell(sku,r,wk,computed){
+  const pl=planOf(sku);
+  const cur=(pl.manual&&pl.manual[r.loc.id]||{})[wk];
+  const set=cur!=null&&(r.basis==="manual"||r.basis==="flat");
+  const td=el("td",{class:"v inp"+(set?" edited":"")});
+  td.append(el("input",{type:"text",inputmode:"numeric",value:set?n0(cur):"",
+    placeholder:n0(computed)||"0",
+    title:"What we expect "+r.loc.name+" to draw down. "+(BASIS_HINT[r.basis]||""),
+    onchange:e=>setDraw(sku,r,wk,e.target.value)}));
+  return td;
+}
+function setDraw(sku,r,wk,val){
+  const pl=planOf(sku);
+  pl.manual[r.loc.id]=pl.manual[r.loc.id]||{};
+  const v=num(val);
+  if(v==null) delete pl.manual[r.loc.id][wk]; else pl.manual[r.loc.id][wk]=v;
+  if(r.basis!=="flat"&&r.basis!=="manual") pl.basis[r.loc.id]="manual";
+  persist("plan",pl); render();
+}
 /* The current week's column is a decision, not yet a fact. Monday morning last
    week's actuals go in on the Week actuals screen; Monday afternoon this column
    is where we say what's going out this week, and everything downstream moves
@@ -1250,7 +1296,9 @@ function setShip(sku,r,wk,val){
   pl[field][r.loc.id]=pl[field][r.loc.id]||{};
   const v=num(val);
   if(v==null) delete pl[field][r.loc.id][wk]; else pl[field][r.loc.id][wk]=v;
-  if(field==="manual") pl.basis[r.loc.id]="manual";   /* typed figures win */
+  /* typed figures win — but a flat channel is meant to carry one figure forward,
+     so typing into it must not quietly drop it back to manual entry */
+  if(field==="manual"&&pl.basis[r.loc.id]!=="flat") pl.basis[r.loc.id]="manual";
   persist("plan",pl); render();
 }
 function setPlanned(sku,loc,wk,val){const pl=planOf(sku);pl.planned[loc]=pl.planned[loc]||{};
