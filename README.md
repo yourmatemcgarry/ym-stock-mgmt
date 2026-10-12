@@ -3,11 +3,12 @@
 Stock and production planning for Your Mates Brewing — the working parts of the
 Stock Management Sheet, as a web app.
 
-Five screens: **Forecast** (projected stock on hand across the coldroom,
+Seven screens: **Forecast** (projected stock on hand across the coldroom,
 distributors and channels), **Stocktake** (the weekly batch-level count),
-**Production** (packaging runs and the brew dates they imply), **Aged stock**
-(best-before and send-by cut-offs) and **Setup** (products, packs, distributors
-and channels).
+**Week actuals** (what shipped, one figure per channel), **Production**
+(packaging runs and the brew dates they imply), **Aged stock** (best-before and
+send-by cut-offs), **Review** (year on year, and how well each forecast basis
+has held up) and **Setup** (products, packs, distributors and channels).
 
 ---
 
@@ -33,8 +34,13 @@ showing what it already has.
 When a deploy carries newer data the app says so: a bar appears across the top
 of every screen — *"This deploy has newer data than the site is showing"* — with
 an **Import it now** button. Pressing it writes every record in the deployed
-file over the top. Anything not in the file (a stocktake entered in the app, a
-run added by hand) is left alone.
+file over the top.
+
+Packaging runs that came from the sheet (their ids start with `sheet-`) are also
+*removed* when the file no longer carries them, so a run the sheet has moved to
+another week or cancelled does not linger and get counted twice. Anything
+created in the app — a stocktake entered here, a run scheduled from the
+Production tab — has an id of its own and is left alone.
 
 The same control sits permanently under **Setup -> Data in this site**, with the
 date of the export the live data came from, so you can always tell which vintage

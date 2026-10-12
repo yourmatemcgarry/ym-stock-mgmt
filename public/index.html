@@ -595,8 +595,8 @@ async function openBackend(){
 
 /* ---- import the data file shipped with the site ----
    Runs on first use, and again whenever a new build is deployed: every document
-   in the file is written over the top. Anything not in the file (a stocktake
-   entered here, a run added by hand) is left alone. */
+   in the file is written over the top. Anything added here by hand (a stocktake
+   entered on this site, a run scheduled from the Production tab) is left alone. */
 async function fetchSeed(){
   const r=await fetch("seed.json?t="+Date.now(),{cache:"no-store"});
   if(!r.ok) throw new Error("Couldn't read seed.json from the site ("+r.status+")");
@@ -610,6 +610,20 @@ async function importSeed(onProgress,seed){
   for(const [kind,doc] of all){
     await S.backend.set(kind,doc);
     done++; if(onProgress) onProgress(done,all.length);
+  }
+  /* The sheet owns every document whose id begins with "sheet-" — the packaging
+     runs. When a run is moved to another week or dropped it simply stops
+     appearing in the file, so the copy already here has to go, or the coldroom
+     counts beer in twice. Ids that don't start with "sheet-" were created on
+     this site and are never touched. */
+  for(const kind of KINDS){
+    const keep=new Set((seed[kind]||[]).map(d=>String(d.id)));
+    let have=[];
+    try{ have=await S.backend.list(kind); }catch(e){ continue; }
+    for(const doc of have){
+      const id=String((doc&&doc.id)||"");
+      if(id.slice(0,6)==="sheet-"&&!keep.has(id)) await S.backend.del(kind,id);
+    }
   }
   if(seed.meta){
     const cfg=Object.assign({},S.config,{id:"app",dataStamp:seed.meta.generated,
@@ -1043,27 +1057,8 @@ function viewForecast(pane,ctl){
   t.append(tile("Last stocktake",st?fmtD(st.weekStart):"—",st?(st.entries||[]).length+" batch lines":"Add one to start"));
   pane.append(t);
 
-  if(a.length){
-    const c=el("div",{class:"card"});
-    c.append(el("header",{},el("h3",{},"Projected stock-outs"),el("span",{class:"hint"},
-      "Week the coldroom goes negative if nothing more is packaged")));
-    const w=el("div",{class:"scroll"}), tb=el("table");
-    tb.append(el("thead",{},el("tr",{},el("th",{},"SKU"),el("th",{},"Runs out"),el("th",{class:"num"},"Weeks away"),
-      el("th",{},"Brew by"),el("th",{},""))));
-    const body=el("tbody");
-    for(const x of a.slice(0,12)){
-      body.append(el("tr",{class:"stripe "+x.sev},
-        el("td",{},el("b",{},x.name)),
-        el("td",{class:"mono"},fmtD(x.week)),
-        el("td",{class:"num"},String(x.weeks)),
-        el("td",{class:"mono"},fmtD(x.brewBy)),
-        el("td",{},el("button",{class:"btn sm",onclick:()=>{S.open[x.sku]=true;render();
-          setTimeout(()=>{const n=document.getElementById("sku-"+x.sku);if(n)n.scrollIntoView({block:"center"});},20);
-        }},"Open"),el("button",{class:"btn sm",style:"margin-left:6px",
-          onclick:()=>newRun(x.sku,x.brewBy)},"Schedule run"))));
-    }
-    tb.append(body); w.append(tb); c.append(w); pane.append(c);
-  }
+  /* the projected stock-out table lived here; the tiles above carry the same
+     warning and the per-SKU cards carry the detail, so it was removed */
 
   const vis=visibleSkus();
   if(!vis.length) pane.append(el("div",{class:"card"},el("div",{class:"empty"},
