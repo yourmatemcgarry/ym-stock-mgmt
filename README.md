@@ -146,10 +146,14 @@ Taken from the conventions in the original sheet:
   typed figure is a known order and is used instead of the calculated one for
   that week, and clearing the cell hands it back to the calculation. Typed
   figures show in bold.
-- The coldroom balance is opening stock, plus beer in from planned packaging
-  runs, less everything shipped out. Where it goes negative, that's the
-  stock-out week; the brew-by date works back from it using each product's
-  brew-to-pack time (Setup, default 21 days).
+- The coldroom is shown at both ends of each week — **start of week**, then beer
+  in from packaging runs, then everything shipped out, then **end of week**. A
+  week that can't be got through shows as a negative at the end of it, which is
+  the stock-out week; the brew-by date works back from it using each product's
+  brew-to-pack time (Setup, default 21 days). Across the history columns the end
+  of one week and the start of the next are two different things — the first is
+  what the movements say should be there, the second is what was counted — so a
+  gap between them is stock the paperwork hasn't accounted for.
 - **Send by** is best before minus half the product's shelf life — the last date
   a batch can go to a distributor with half its life left. Shelf life is per
   product per pack in Setup, defaulting to 12 months for cans and 6 for kegs.

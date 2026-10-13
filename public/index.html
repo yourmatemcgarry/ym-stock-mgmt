@@ -885,8 +885,11 @@ function compute(sku){
      Leave them out and every projection runs a week flattering. */
   const inNow=beerInFor(sku,[cw])[0]||0;
   const outNow=sum(activeLocs().map(l=>at(sku,"out",histLoc(sku,"out",l.id),cw)||0));
-  const cold=[]; let c=openCold+inNow-outNow;
-  for(let k=0;k<weeks.length;k++){ c=c+beerIn[k]-totalShip[k]; cold.push(c); }
+  /* both ends of each week: what's in the coldroom on the Monday, and what's
+     left after that week's packaging and shipments. The pair is what says
+     whether a week can be got through, not just which week ends short. */
+  const cold=[], coldStart=[]; let c=openCold+inNow-outNow;
+  for(let k=0;k<weeks.length;k++){ coldStart.push(c); c=c+beerIn[k]-totalShip[k]; cold.push(c); }
   const wkAvg=sum(totalShip)/Math.max(1,totalShip.length);
   const cover=cold.map(v=>wkAvg>0?v/wkAvg:null);
   let stockoutWeek=null;
@@ -895,7 +898,7 @@ function compute(sku){
   const lead=(p&&p.brewToPackDays)||21;
   const brewBy=stockoutWeek?iso(new Date(D(stockoutWeek)-lead*DAY)):null;
   const surplusTarget=(p&&p.surplusTarget&&p.surplusTarget[sku.split("__").slice(1).join("__")])||null;
-  return {sku,weeks,past,rows,totalShip,beerIn,cold,cover,openCold,inNow,outNow,
+  return {sku,weeks,past,rows,totalShip,beerIn,cold,coldStart,cover,openCold,inNow,outNow,
     stockoutWeek,brewBy,wkAvg,surplusTarget,
     pastTotalOut:past.map(w=>sum(activeLocs().map(l=>at(sku,"out",histLoc(sku,"out",l.id),w)||0))),
     pastCold:past.map(w=>at(sku,"soh","coldroom",w)),
@@ -1191,11 +1194,16 @@ function skuGrid(s,c){
   }
   // ---- coldroom block ----
   tb.append(el("tr",{class:"sep"},el("td",{colspan:axis.length+1})));
-  const trT=el("tr",{class:"tot"});
-  trT.append(el("td",{class:"stick"},el("div",{class:"lbl"},el("span",{class:"tag c"},"out"),"Total shipped out")));
-  (c.pastTotalOut||[]).forEach((v,i)=>trT.append(vcell(v,i)));
-  c.totalShip.forEach((v,i)=>trT.append(vcell(v,NP+i)));
-  tb.append(trT);
+
+  /* read down the column: what was there Monday, what gets packaged, what goes
+     out, and what's left — so a week that can't be got through shows up as a
+     negative at the end of it, not just as a week that ends short. */
+  const trS=el("tr",{});
+  trS.append(el("td",{class:"stick"},el("div",{class:"lbl"},
+    el("span",{class:"tag c"},"cold"),"Coldroom — start of week")));
+  (c.pastCold||[]).forEach((v,i)=>trS.append(vcell(v,i,v!=null&&v<0?"neg":"")));
+  c.coldStart.forEach((v,i)=>trS.append(vcell(v,NP+i,v<0?"neg":"")));
+  tb.append(trS);
 
   const trB=el("tr",{});
   trB.append(el("td",{class:"stick"},el("div",{class:"lbl"},
@@ -1211,9 +1219,21 @@ function skuGrid(s,c){
   });
   tb.append(trB);
 
+  const trT=el("tr",{});
+  trT.append(el("td",{class:"stick"},el("div",{class:"lbl"},el("span",{class:"tag c"},"out"),"Total shipped out")));
+  (c.pastTotalOut||[]).forEach((v,i)=>trT.append(vcell(v,i)));
+  c.totalShip.forEach((v,i)=>trT.append(vcell(v,NP+i)));
+  tb.append(trT);
+
+  /* start of week, plus what's packaged, less what goes out */
+  const endOf=i=>{const s0=(c.pastCold||[])[i];
+    if(s0==null) return null;
+    return s0+((c.pastIn||[])[i]||0)-((c.pastTotalOut||[])[i]||0);};
   const trC=el("tr",{class:"tot"});
-  trC.append(el("td",{class:"stick"},el("div",{class:"lbl"},el("span",{class:"tag c"},"cold"),"Coldroom SOH")));
-  (c.pastCold||[]).forEach((v,i)=>trC.append(vcell(v,i)));
+  trC.append(el("td",{class:"stick"},el("div",{class:"lbl"},
+    el("span",{class:"tag c"},"cold"),"Coldroom — end of week")));
+  (c.pastCold||[]).forEach((_,i)=>{const v=endOf(i);
+    trC.append(vcell(v,i,v!=null&&v<0?"neg":""));});
   c.cold.forEach((v,i)=>trC.append(vcell(v,NP+i,v<0?"neg":v<c.wkAvg*1.5?"low":"")));
   tb.append(trC);
 
