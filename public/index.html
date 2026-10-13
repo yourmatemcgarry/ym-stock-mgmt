@@ -996,13 +996,11 @@ const ICONS={
  stocktake:'<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M9 8h6M9 12h6M9 16h3"/>',
  production:'<path d="M4 20V9l5 3V9l5 3V4l6 3v13z"/>',
  ageing:'<circle cx="12" cy="12" r="8"/><path d="M12 7v5l3 2"/>',
- actuals:'<path d="M4 5h16v14H4z"/><path d="M4 10h16M9 10v9"/><path d="M12 14l2 2 4-4"/>',
  review:'<path d="M4 19V5"/><path d="M4 19h16"/><path d="M8 15l4-6 3 3 4-6"/>',
  setup:'<path d="M4 6h16M4 12h16M4 18h16"/><circle cx="9" cy="6" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="8" cy="18" r="2"/>'};
 const VIEWS=[
  {id:"forecast",label:"Forecast",title:"Forecast",sub:"Monday afternoon: what's going out this week, and the weeks after it"},
  {id:"stocktake",label:"Stocktake",title:"Weekly stocktake",sub:"Batch-level counts by location — the numbers everything else runs on"},
- {id:"actuals",label:"Week actuals",title:"Week actuals",sub:"Monday morning: what shipped last week. Stock on hand and drawdown fill themselves in"},
  {id:"production",label:"Production",title:"Production schedule",sub:"Planned packaging runs and the brew dates they imply"},
  {id:"ageing",label:"Aged stock",title:"Aged stock",sub:"Best before, send-by cut-offs and what needs moving"},
  {id:"review",label:"Review",title:"Review",sub:"This year against the last two, and how well each forecast basis has held up"},
@@ -1039,7 +1037,7 @@ function render(){
   const pane=clear($("#pane")), ctl=clear($("#topctl"));
   if(S.seedUpdate) pane.append(seedBanner());
   try{
-    ({forecast:viewForecast,stocktake:viewStocktake,actuals:viewActuals,
+    ({forecast:viewForecast,stocktake:viewStocktake,
       production:viewProduction,ageing:viewAgeing,review:viewReview,
       setup:viewSetup}[S.view])(pane,ctl,v);
   }catch(e){
@@ -1207,8 +1205,10 @@ function skuGrid(s,c){
     lab.append(labrow);
     lab.title=r.loc.name+" — "+LOCTYPE[r.loc.type];
     tr1.append(lab);
+    /* the two live columns: last week, which is being tidied up on Monday
+       morning, and this week, which is being decided on Monday afternoon */
     (r.pastOut||[]).forEach((v,i)=>tr1.append(
-      i===cwIdx?nowCell(s.id,r,c.past[i],v):vcell(v,i)));
+      i>=cwIdx-1?nowCell(s.id,r,c.past[i],v,i===cwIdx):vcell(v,i)));
     r.ship.forEach((v,i)=>tr1.append(shipCell(s.id,r,c.weeks[i],v)));
     tb.append(tr1);
     // their drawdown + SOH
@@ -1229,7 +1229,9 @@ function skuGrid(s,c){
       l3.append(el("div",{class:"lbl"},el("span",{style:"padding-left:22px"},"Their SOH"),ms,
         el("span",{class:"hint",title:"Target stock on hand at this distributor"},"tgt "+n0(r.target))));
       tr3.append(l3);
-      (r.pastSoh||[]).forEach((v,i)=>tr3.append(vcell(v,i)));
+      (r.pastSoh||[]).forEach((v,i)=>tr3.append(
+        i>=cwIdx-1&&!countedAt(r.loc.id,c.past[i])
+          ? sohNowCell(s.id,r,c.past[i],i===cwIdx) : vcell(v,i)));
       r.soh.forEach((v,i)=>{const low=r.target>0&&v<r.target*0.4;
         tr3.append(vcell(v,NP+i,v<0?"neg":low?"low":""));});
       tb.append(tr3);
@@ -1320,16 +1322,32 @@ function setDraw(sku,r,wk,val){
   if(r.basis!=="flat"&&r.basis!=="manual") pl.basis[r.loc.id]="manual";
   persist("plan",pl); render();
 }
-/* The current week's column is a decision, not yet a fact. Monday morning last
-   week's actuals go in on the Week actuals screen; Monday afternoon this column
-   is where we say what's going out this week, and everything downstream moves
-   with it. It writes the same figure the actuals screen writes, so when the
-   week ends there is nothing to re-enter — only to correct. */
-function nowCell(sku,r,wk,v){
-  const td=el("td",{class:"v inp now"+(v!=null?" edited":"")});
+/* The chains report their own stock rather than being counted, so their
+   stock-on-hand cell takes a typed figure in the two live columns. What shows
+   greyed is carried forward from the last real one until the week's lands. A
+   location that was counted is not typeable: its count is the better number. */
+function sohNowCell(sku,r,wk,isNow){
+  const stored=at(sku,"soh",histLoc(sku,"soh",r.loc.id),wk);
+  const est=stored==null?estimateSOH(sku,r.loc.id,wk):null;
+  const td=el("td",{class:"v inp"+(isNow?" now":"")+(stored!=null?" edited":"")});
+  td.append(el("input",{type:"text",inputmode:"numeric",
+    value:stored!=null?n0(stored):"",
+    placeholder:est==null?"—":n0(est),
+    title:stored!=null?("What "+r.loc.name+" reported holding this week")
+      :("Carried forward — type what "+r.loc.name+" reports and this week's drawdown becomes exact"),
+    onchange:e=>{setTheirSOH(sku,r.loc.id,wk,e.target.value);render();}}));
+  return td;
+}
+/* Two columns are live. Monday morning last week's is tidied up with what
+   actually went out; Monday afternoon this one says what is going out, and
+   everything downstream moves with it. Both write the week's actual figure, so
+   when a week ends there is nothing to re-enter — only to correct. */
+function nowCell(sku,r,wk,v,isNow){
+  const td=el("td",{class:"v inp"+(isNow?" now":"")+(v!=null?" edited":"")});
   td.append(el("input",{type:"text",inputmode:"numeric",value:v==null?"":n0(v),
     placeholder:"—",
-    title:"Going out to "+r.loc.name+" this week. Saved as the week's actual.",
+    title:isNow?("Going out to "+r.loc.name+" this week. Saved as the week's actual.")
+               :("What actually went to "+r.loc.name+" last week"),
     onchange:e=>{setActual(sku,r.loc.id,wk,e.target.value);render();}}));
   return td;
 }
@@ -1490,6 +1508,12 @@ function viewStocktake(pane,ctl){
   const st=curStocktake();
   ctl.append(sel(S.stock.map(s=>[s.weekStart,fmtWY(s.weekStart)+"  ·  "+(s.entries||[]).length+" lines"]),
     st?st.weekStart:"",{onchange:e=>{stWeek=e.target.value;render();}}));
+  ctl.append(el("button",{class:"btn",title:"Fold every count back into the weekly history and work the drawdowns out again",
+    onclick:()=>{
+      const n=syncHistoryFromStocktakes(true);
+      flash(n.size?("Stock on hand and drawdown refreshed for "+n.size+" SKUs"):"Already up to date");
+      render();
+    }},"Recalculate from stocktakes"));
   ctl.append(el("button",{class:"btn pri",onclick:newStocktake},"New stocktake"));
   if(!st){
     pane.append(el("div",{class:"card"},el("div",{class:"empty"},el("b",{},"No stocktakes yet"),
@@ -1787,20 +1811,6 @@ function editRunsForWeek(sku,week){
    distributor's drawdown falls out of the two together — so this screen asks
    for shipments only, and fills the rest in. */
 
-let actWeek = null;
-function actualsWeek(){
-  if(actWeek) return actWeek;
-  /* Monday morning the job is the week that just finished. This week is still a
-     decision — it gets made on the Forecast screen and only becomes an actual
-     once it's over. The picker still reaches this week for a correction. */
-  return wkAdd(S.config.currentWeek,-1);
-}
-function weekChoices(){
-  const set=new Set(S.stock.map(s=>s.weekStart));
-  for(let i=0;i<8;i++) set.add(wkAdd(S.config.currentWeek,-i));
-  return [...set].filter(w=>w<=S.config.currentWeek).sort().reverse().slice(0,16);
-}
-function actualOut(sku,locId,wk){ return at(sku,"out",histLoc(sku,"out",locId),wk); }
 
 /* A reported stock on hand is the same kind of fact as a count: it fixes that
    week's drawdown, and the week after it, since both are worked out from it. */
@@ -1824,146 +1834,13 @@ function setActual(sku,locId,wk,val){
 let histTimer=null; const histDirty=new Set();
 function queueHistSave(sku){
   histDirty.add(sku);
-  const chip=$("#actCount"); if(chip) chip.textContent=actualsProgress(actualsWeek());
   clearTimeout(histTimer);
   histTimer=setTimeout(()=>{
     for(const s of histDirty) persist("history",stripIx(S.hist[s]));
     histDirty.clear();
   },700);
 }
-function actualsRows(wk){
-  const out=[];
-  for(const s of skus()){
-    if(s.product.forecast===false) continue;
-    const chans=channelsFor(s.id);
-    const locs=activeLocs().filter(l=>chans.has(l.id));
-    if(!locs.length) continue;
-    out.push({sku:s,locs});
-  }
-  return out;
-}
-function actualsProgress(wk){
-  let done=0,total=0;
-  for(const {sku,locs} of actualsRows(wk)) for(const l of locs){
-    total++; if(actualOut(sku.id,l.id,wk)!=null) done++;
-  }
-  return done+" of "+total+" filled in";
-}
 
-function viewActuals(pane,ctl){
-  const wk=actualsWeek();
-  ctl.append(sel(weekChoices().map(w=>[w,"w/c "+fmtWY(w)+(S.stock.some(s=>s.weekStart===w)?"":"  ·  no stocktake")]),
-    wk,{onchange:e=>{actWeek=e.target.value;render();}}));
-  ctl.append(el("button",{class:"btn",onclick:()=>{
-    const n=syncHistoryFromStocktakes(true);
-    flash(n.size?("Stock on hand and drawdown refreshed for "+n.size+" SKUs"):"Already up to date");
-    render();
-  }},"Recalculate from stocktakes"));
-
-  const st=S.stock.find(s=>s.weekStart===wk);
-  const t=el("div",{class:"tiles"});
-  const wkTile=tile("Week","w/c "+fmtWY(wk),"");
-  wkTile.lastChild.id="actCount"; wkTile.lastChild.textContent=actualsProgress(wk);
-  t.append(wkTile);
-  t.append(tile("Stocktake",st?"counted":"not counted",
-    st?(st.entries||[]).length+" batch lines":"Stock on hand can't be worked out",st?"good":"warn"));
-  const runs=S.runs.filter(r=>monday(r.packDate)===wk&&r.status!=="cancelled");
-  t.append(tile("Packaged this week",String(runs.length)+(runs.length===1?" run":" runs"),
-    runs.length?runs.map(r=>(P(r.productId)||{}).name).filter((v,i,a)=>a.indexOf(v)===i).join(", "):"Nothing scheduled"));
-  let shipped=0; for(const {sku,locs} of actualsRows(wk)) for(const l of locs)
-    shipped+=actualOut(sku.id,l.id,wk)||0;
-  t.append(tile("Shipped out",n0(shipped),"Across every channel"));
-  pane.append(t);
-
-  pane.append(el("div",{class:"note"},el("b",{},"What to fill in. "),
-    "What left the brewery, one figure per channel — and, for the chains and anyone else we don't ",
-    "count, what they report holding. Where a location was counted, its stock on hand comes from ",
-    "the stocktake and can't be typed; where it wasn't, the cell carries forward from the last ",
-    "figure there was, in grey, until you put the real one over it. Either way the drawdown works ",
-    "itself out: what they held last week, plus whatever landed, less what they hold now."));
-
-  if(!st) pane.append(el("div",{class:"card"},el("div",{class:"body"},
-    el("div",{class:"note",style:"border-color:var(--warn)"},
-      el("b",{},"No stocktake for this week yet. "),
-      "You can still record shipments, but their stock on hand and drawdown stay blank until the count is in."))));
-
-  for(const {sku,locs} of actualsRows(wk)){
-    const c=el("div",{class:"card"});
-    const anyFilled=locs.some(l=>actualOut(sku.id,l.id,wk)!=null);
-    c.append(el("header",{},el("h3",{},sku.product.name," ",el("span",{class:"dim"},sku.pack)),
-      el("span",{class:"chip "+(anyFilled?"ok":"")},
-        locs.filter(l=>actualOut(sku.id,l.id,wk)!=null).length+" of "+locs.length),
-      el("span",{style:"flex:1"}),
-      el("span",{class:"hint"},"coldroom "+n0(at(sku.id,"soh","coldroom",wk))||"")));
-    const w=el("div",{class:"scroll"}), tb=el("table");
-    tb.append(el("thead",{},el("tr",{},el("th",{},"Channel"),el("th",{},"Type"),
-      el("th",{class:"num"},"Shipped out"),el("th",{class:"num"},"Their SOH"),
-      el("th",{class:"num"},"Drawdown"),el("th",{class:"num"},"Same week last year"))));
-    const body=el("tbody");
-    for(const l of locs){
-      const tracks=(l.type==="distributor"||l.type==="retail");
-      const cur=actualOut(sku.id,l.id,wk);
-      const soh=tracks?at(sku.id,"soh",histLoc(sku.id,"soh",l.id),wk):null;
-      const used=tracks?at(sku.id,"used",histLoc(sku.id,"used",l.id),wk):null;
-      const ly=actualOut(sku.id,l.id,wkAdd(wk,-52));
-      const inp=el("input",{class:"cellinp num qty",type:"text",inputmode:"decimal",
-        value:cur!=null?n0(cur):"", placeholder:"—",
-        onfocus:e=>e.target.select(), onkeydown:e=>stepCell(e),
-        onchange:e=>{setActual(sku.id,l.id,wk,e.target.value);render();}});
-      /* counted locations get their stock on hand from the count. The chains
-         and the rest nobody counts take it here, pre-filled with the carried
-         forward estimate so the cell is never simply empty. */
-      const counted=tracks&&countedAt(l.id,wk);
-      let sohCell;
-      if(tracks&&!counted){
-        const est=soh==null?estimateSOH(sku.id,l.id,wk):null;
-        sohCell=el("td",{class:"cell"},el("input",{class:"cellinp num qty",type:"text",
-          inputmode:"decimal",value:soh!=null?n0(soh):"",
-          placeholder:est==null?"—":n0(est),
-          title:soh!=null?"What they reported holding. Their drawdown is worked out from it."
-            :(est==null?"No figure to carry forward yet"
-              :"Carried forward from the last figure there was — type what they report and the drawdown becomes exact"),
-          onfocus:e=>e.target.select(), onkeydown:e=>stepCell(e),
-          onchange:e=>{setTheirSOH(sku.id,l.id,wk,e.target.value);render();}}));
-      }else{
-        sohCell=el("td",{class:"num "+(soh==null?"dim":"")},soh==null?"—":n0(soh));
-      }
-      body.append(el("tr",{"data-zero":String(cur==null)},
-        el("td",{},el("b",{},l.name)),
-        el("td",{class:"dim"},LOCTYPE[l.type]),
-        el("td",{class:"cell"},inp),
-        sohCell,
-        el("td",{class:"num "+(used==null?"dim":"")},used==null?"—":n0(used)),
-        el("td",{class:"num dim"},ly==null?"—":n0(ly))));
-    }
-    tb.append(body); w.append(tb); c.append(w); pane.append(c);
-  }
-
-  if(runs.length){
-    const rc=el("div",{class:"card"});
-    rc.append(el("header",{},el("h3",{},"Packaged this week"),
-      el("span",{class:"hint"},"Mark a run confirmed once it's actually been packed")));
-    const w=el("div",{class:"scroll"}), tb=el("table");
-    tb.append(el("thead",{},el("tr",{},el("th",{},"Pack date"),el("th",{},"Product"),
-      el("th",{},"Pack"),el("th",{class:"num"},"Units"),el("th",{},"Status"),el("th",{},""))));
-    const body=el("tbody");
-    for(const r of runs.sort((a,b)=>a.packDate<b.packDate?-1:1)){
-      body.append(el("tr",{class:"stripe "+(r.status==="confirmed"?"ok":"warn")},
-        el("td",{class:"mono"},fmtD(r.packDate)),
-        el("td",{},(P(r.productId)||{name:r.productId}).name),
-        el("td",{class:"dim"},r.pack),
-        el("td",{class:"num"},n0(r.units)),
-        el("td",{},el("span",{class:"chip "+(r.status==="confirmed"?"ok":"warn")},r.status||"planned")),
-        el("td",{},r.status==="confirmed"
-          ?el("button",{class:"btn sm",onclick:()=>{r.status="planned";persist("runs",r);render();}},"Unconfirm")
-          :el("button",{class:"btn sm",onclick:()=>{r.status="confirmed";persist("runs",r);render();}},"Confirm"))));
-    }
-    tb.append(body); w.append(tb); rc.append(w); pane.append(rc);
-  }
-}
-</script>
-<script>
-"use strict";
 /* ============================ line chart ============================
    Small SVG line chart: 2px marks, recessive grid, direct labels at the right
    edge, legend above, and a crosshair tooltip. Text takes ink tokens, never a

@@ -3,12 +3,12 @@
 Stock and production planning for Your Mates Brewing — the working parts of the
 Stock Management Sheet, as a web app.
 
-Seven screens: **Forecast** (projected stock on hand across the coldroom,
-distributors and channels), **Stocktake** (the weekly batch-level count),
-**Week actuals** (what shipped, one figure per channel), **Production**
-(packaging runs and the brew dates they imply), **Aged stock** (best-before and
-send-by cut-offs), **Review** (year on year, and how well each forecast basis
-has held up) and **Setup** (products, packs, distributors and channels).
+Six screens: **Forecast** (the grid everything is typed into and read off —
+projected stock on hand across the coldroom, distributors and channels),
+**Stocktake** (the weekly batch-level count), **Production** (packaging runs and
+the brew dates they imply), **Aged stock** (best-before and send-by cut-offs),
+**Review** (year on year, and how well each forecast basis has held up) and
+**Setup** (products, packs, distributors and channels).
 
 ---
 
@@ -179,8 +179,8 @@ it — the same week a year earlier, or the trailing 8-week average running into
 — and compares both with what actually shipped. The average weekly miss per
 channel says which basis is worth trusting for that SKU, with a button to set it.
 
-Both read the same weekly history the forecast runs on, so they get better as
-Week actuals is kept up.
+Both read the same weekly history the forecast runs on, so they get better the
+more faithfully each week's actuals are filled in.
 
 ## Setting a SKU up
 
@@ -208,27 +208,31 @@ yet says so in the grid, with a button to pick them.
 
 **Monday morning — what happened.** Stocktake first: *Stocktake -> New
 stocktake*, pick the week, start from last week's batches with quantities
-cleared, and count. Then **Week actuals**, which opens on *the week that just
-finished*: one figure per channel for what actually left the brewery. The week
-picker still reaches this week and the weeks before it if something needs
-correcting.
+cleared, and count. Then last week's column on the **Forecast** grid: what
+actually went out to each channel, and — for the chains and anyone else nobody
+counts — what they report holding. Both are typed straight into the grid; there
+is no separate screen for them.
 
 Alongside it, the chains' **stock on hand**. The count covers the coldroom, ALM,
 Paramount QLD and ILG; nobody counts Coles, WOW, ALM Cairns or Paramount NSW, so
-those take a typed figure from the retailer's own reporting. The cell is
-pre-filled in grey with last week's position plus whatever landed less the
-expected drawdown, so it is never blank and the forecast never reads a missing
-figure as an empty warehouse — type the reported number over it and that week's
-drawdown becomes exact, the same as a count does for the others. A counted
-location's stock on hand comes from the count and can't be typed here.
+those take a typed figure from the retailer's own reporting, on the *Their SOH*
+line. The cell is pre-filled in grey with last week's position plus whatever
+landed less the expected drawdown, so it is never blank and the forecast never
+reads a missing figure as an empty warehouse — type the reported number over it
+and that week's drawdown becomes exact, the same as a count does for the others.
+A counted location's stock on hand comes from the count and can't be typed.
 
-**Monday afternoon — what's going out.** On **Forecast**, the current week is
-the tinted column between the history and the projection, and every shipping
-figure in it can be typed. Put in what's going out this week and the week after
-moves underneath it: a top-up distributor's stock on hand rises and next week's
-top-up falls by the same amount, while a chain's order comes straight out of the
-coldroom. Those figures are saved as that week's actuals, so come next Monday
-there is nothing to re-enter — only to correct where the week went differently.
+**Monday afternoon — what's going out.** The current week is the tinted column,
+and every shipping figure in it can be typed. Put in what's going out this week
+and the week after moves underneath it: a top-up distributor's stock on hand
+rises and next week's top-up falls by the same amount, while a chain's order
+comes straight out of the coldroom. Those figures are saved as that week's
+actuals, so come next Monday there is nothing to re-enter — only to correct in
+the column beside it.
+
+The two live columns sit at the right-hand end of the history block: last week,
+which is being tidied up, and this week, which is being decided. Everything
+before them is settled and read-only; everything after is the forecast.
 
 The coldroom balance accounts for this: the count is taken on Monday morning, so
 this week's packaging and this week's shipments are applied between the count
@@ -236,9 +240,8 @@ and the first projected week.
 
 Stock on hand comes from the stocktake, and each distributor's drawdown falls
 out of the two together — what they held last week, plus whatever landed that
-week, less what they hold now. Both columns fill themselves and are shown beside
-your entry so the arithmetic is visible. **Recalculate from stocktakes** redoes
-them for every week if a count is corrected after the fact.
+week, less what they hold now. **Recalculate from stocktakes**, on the Stocktake
+screen, redoes that for every week if a count is corrected after the fact.
 
 Those figures land in the same weekly history the forecast reads, so prior year
 and recent average keep working from the app's own record rather than needing
