@@ -243,6 +243,12 @@ out of the two together — what they held last week, plus whatever landed that
 week, less what they hold now. **Recalculate from stocktakes**, on the Stocktake
 screen, redoes that for every week if a count is corrected after the fact.
 
+Counting a week early is fine — start the stocktake for next week whenever it
+suits. It doesn't move the app's working week, which always follows the
+calendar, and a copied line says nothing about what is there until a quantity is
+typed into it. **Blank means not counted yet; a typed 0 means someone went and
+found none.** Only the second writes anything into the weekly history.
+
 A count started by mistake can be thrown away: pick its week on the Stocktake
 screen and press **Delete**. It takes with it the stock on hand it wrote into
 the weekly history, and the drawdowns worked out from those figures — but only

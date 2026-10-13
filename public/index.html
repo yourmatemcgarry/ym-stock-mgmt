@@ -425,8 +425,12 @@ async function boot(){
   S.ready=true;
   /* the working week is this calendar week — it moves on whether or not a
      stocktake has been entered, and the header says how far behind the count is */
+  /* and it is always THIS calendar week, in both directions. Left to drift
+     ahead — by counting next week's stock early, say — every column in the grid
+     shifts with it and the forecast starts a week late, with nothing to put it
+     back. */
   const thisWeek=monday(new Date());
-  if(wkDiff(S.config.currentWeek,thisWeek)>0){ S.config.currentWeek=thisWeek; saveConfig(); }
+  if(S.config.currentWeek!==thisWeek){ S.config.currentWeek=thisWeek; saveConfig(); }
   syncHistoryFromStocktakes(false);
   render();
   if(b&&b.kind==="rest") checkSeedVersion().then(meta=>{
@@ -498,6 +502,7 @@ function syncHistoryFromStocktakes(save){
   for(const st of S.stock){
     const by={};
     for(const e of (st.entries||[])){
+      if(e.qty==null) continue;        /* line not counted yet — says nothing */
       const k=skuId(e.productId,e.pack)+"|"+e.locationId;
       by[k]=(by[k]||0)+(e.qty||0);
     }
@@ -554,12 +559,15 @@ function countedAt(locId,wk){
 function openingSOH(sku,locId){
   const st=S.stock.find(s=>s.weekStart<=S.config.currentWeek)||S.stock[0];
   if(st&&st.entries){
-    const rows=st.entries.filter(e=>skuId(e.productId,e.pack)===sku&&e.locationId===locId);
+    /* a line with no quantity hasn't been counted yet, so it says nothing about
+       what is there — only a figure someone actually entered does */
+    const counted=st.entries.filter(e=>e.qty!=null);
+    const rows=counted.filter(e=>skuId(e.productId,e.pack)===sku&&e.locationId===locId);
     if(rows.length) return sum(rows.map(r=>r.qty));
     /* counted zero only if this SKU was actually counted somewhere in this stocktake
        and this location was counted too — otherwise fall back to the last known SOH */
-    const skuCounted=st.entries.some(e=>skuId(e.productId,e.pack)===sku);
-    const locCounted=st.entries.some(e=>e.locationId===locId);
+    const skuCounted=counted.some(e=>skuId(e.productId,e.pack)===sku);
+    const locCounted=counted.some(e=>e.locationId===locId);
     if(skuCounted&&locCounted) return 0;
   }
   const v=at(sku,"soh",histLoc(sku,"soh",locId),S.config.currentWeek);
@@ -1578,17 +1586,18 @@ function viewStocktake(pane,ctl){
       const sb=e.bestBefore?iso(new Date(D(e.bestBefore)-Math.round(sm/2*30.44)*DAY)):null;
       const d=sb?dDiff(S.config.currentWeek,sb):null;
       const qty=el("input",{class:"cellinp num qty",type:"text",inputmode:"decimal",
-        value:e.qty?n0(e.qty):"", placeholder:"0",
+        value:e.qty!=null?n0(e.qty):"", placeholder:"—",
+        title:"Leave blank until it's counted; type 0 for a bay with none in it",
         onfocus:ev=>ev.target.select(),
         onkeydown:ev=>stepCell(ev),
-        onchange:ev=>{e.qty=num(ev.target.value)||0;stSave(st);}});
+        onchange:ev=>{e.qty=num(ev.target.value);stSave(st);}});
       const bat=el("input",{class:"cellinp mono",type:"text",value:e.batch||"",placeholder:"batch",
         onkeydown:ev=>stepCell(ev),
         onchange:ev=>{e.batch=ev.target.value.trim();stSave(st);}});
       const bb=el("input",{class:"cellinp mono",type:"date",value:e.bestBefore||"",
         onchange:ev=>{e.bestBefore=ev.target.value||null;stSave(st);render();}});
       body.append(el("tr",{class:"stripe "+(d==null?"":d<=0?"crit":d<=28?"warn":""),
-          "data-zero":String(!e.qty)},
+          "data-zero":String(e.qty==null)},
         el("td",{},(P(e.productId)||{name:e.productId}).name),
         el("td",{class:"dim"},e.pack),
         el("td",{class:"cell"},bat),
@@ -1612,7 +1621,7 @@ function stSave(st){
   stTimer=setTimeout(()=>{ if(stPending){persist("stocktakes",stPending); stPending=null;} },700);
 }
 function stProgressText(st){
-  const n=(st.entries||[]).length, done=(st.entries||[]).filter(e=>e.qty).length;
+  const n=(st.entries||[]).length, done=(st.entries||[]).filter(e=>e.qty!=null).length;
   return done+" of "+n+" lines counted";
 }
 /* Enter / arrows walk down the column so a count can be typed without the mouse */
@@ -1691,10 +1700,15 @@ function newStocktake(){
     const w=monday($("#stw",body).value||S.config.currentWeek);
     if(S.stock.some(s=>s.weekStart===w)){flash("A stocktake already exists for that week");return false;}
     const mode=$("#stmode",body).value;
-    const entries=(mode==="copy"&&last?(last.entries||[]).map(e=>({...e,id:uid("e"),qty:0})):[]);
+    /* copied lines start UNCOUNTED, not at zero: a blank quantity means nobody
+       has been to that pallet yet, where a zero means someone went and found
+       none. Starting them at zero told the forecast the whole warehouse was
+       empty the moment the count was created. */
+    const entries=(mode==="copy"&&last?(last.entries||[]).map(e=>({...e,id:uid("e"),qty:null})):[]);
     const doc={id:w,weekStart:w,status:"draft",entries,createdAt:new Date().toISOString(),note:""};
     S.stock.unshift(doc); S.stock.sort((a,b)=>a.weekStart<b.weekStart?1:-1);
-    S.config.currentWeek=w; saveConfig(); persist("stocktakes",doc); stWeek=w;
+    /* counting a week early must not drag the whole app forward with it */
+    persist("stocktakes",doc); stWeek=w;
     flash("Stocktake created for w/c "+fmtWY(w));
   },"Create");
 }
@@ -1717,7 +1731,7 @@ function editEntry(st,e){
     syncPacks(b,e.pack);
   },body=>{
     const rec={id:e.id||uid("e"),productId:$("#ep",body).value,pack:$("#ek",body).value,
-      locationId:$("#el",body).value,batch:$("#eb",body).value.trim(),qty:num($("#eq",body).value)||0,
+      locationId:$("#el",body).value,batch:$("#eb",body).value.trim(),qty:num($("#eq",body).value),
       bestBefore:$("#ebb",body).value||null,packDate:$("#epd",body).value||null};
     if(!rec.productId){flash("Pick a product");return false;}
     st.entries=st.entries||[];
@@ -2418,9 +2432,8 @@ function viewSetup(pane,ctl){
   sc.append(el("header",{},el("h3",{},"Forecast settings")));
   const b=el("div",{class:"body"});
   b.append(el("div",{class:"grid3"},
-    field("Current week",el("input",{type:"date",value:S.config.currentWeek,
-      onchange:e=>{S.config.currentWeek=monday(e.target.value);S.calcCache=null;saveConfig();render();}}),
-      "Everything is measured from here"),
+    field("Current week",el("input",{type:"date",value:S.config.currentWeek,disabled:true}),
+      "Follows the calendar — everything is measured from here"),
     field("Default demand basis",sel([["prior_year","Prior year"],["recent_avg","Recent average"],["manual","Manual entry"]],
       S.config.defaultDrawBasis,{onchange:e=>{S.config.defaultDrawBasis=e.target.value;S.calcCache=null;saveConfig();render();}}),
       "Override per distributor in the forecast grid"),
