@@ -209,9 +209,18 @@ yet says so in the grid, with a button to pick them.
 **Monday morning — what happened.** Stocktake first: *Stocktake -> New
 stocktake*, pick the week, start from last week's batches with quantities
 cleared, and count. Then **Week actuals**, which opens on *the week that just
-finished*: one figure per channel for what actually left the brewery. That is
-the only thing the app can't work out for itself. The week picker still reaches
-this week and the weeks before it if something needs correcting.
+finished*: one figure per channel for what actually left the brewery. The week
+picker still reaches this week and the weeks before it if something needs
+correcting.
+
+Alongside it, the chains' **stock on hand**. The count covers the coldroom, ALM,
+Paramount QLD and ILG; nobody counts Coles, WOW, ALM Cairns or Paramount NSW, so
+those take a typed figure from the retailer's own reporting. The cell is
+pre-filled in grey with last week's position plus whatever landed less the
+expected drawdown, so it is never blank and the forecast never reads a missing
+figure as an empty warehouse — type the reported number over it and that week's
+drawdown becomes exact, the same as a count does for the others. A counted
+location's stock on hand comes from the count and can't be typed here.
 
 **Monday afternoon — what's going out.** On **Forecast**, the current week is
 the tinted column between the history and the projection, and every shipping

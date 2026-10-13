@@ -519,6 +519,38 @@ function syncHistoryFromStocktakes(save){
 const stripIx=h=>{const c=Object.assign({},h); delete c._ix; return c;};
 
 /* opening stock on hand for a sku at a location, from the latest stocktake */
+/* Nobody counts the chains, or ALM Cairns, or Paramount NSW. For those, a week
+   with no figure of its own is carried forward from the last one there was:
+   plus whatever has landed since, less what they were expected to draw. It is
+   an estimate, shown as one, and typing the real figure over it makes that
+   week's drawdown exact — the same as a count does for the others. */
+function estimateSOH(sku,locId,wk){
+  const kS=histLoc(sku,"soh",locId), kO=histLoc(sku,"out",locId), kU=histLoc(sku,"used",locId);
+  const l=L(locId), lead=l?Math.max(0,l.leadTimeWeeks||0):0;
+  let base=null,bw=null;
+  for(let i=0;i<60;i++){
+    const w=wkAdd(wk,-i), v=at(sku,"soh",kS,w);
+    if(v!=null){ base=v; bw=w; break; }
+  }
+  if(base==null) return null;
+  if(bw===wk) return base;
+  const pl=planOf(sku);
+  const basis=(pl.basis&&pl.basis[locId])||S.config.defaultDrawBasis;
+  const manual=(pl.manual&&pl.manual[locId])||{};
+  let soh=base;
+  for(let w=wkAdd(bw,1); w<=wk; w=wkAdd(w,1)){
+    const arrived=at(sku,"out",kO,wkAdd(w,-lead))||0;
+    let drew=at(sku,"used",kU,w);
+    if(drew==null) drew=forecastSeries(sku,"used",kU,[w],basis,manual,S.config.avgWindow,locId)[0];
+    soh=soh+arrived-(drew||0);
+  }
+  return Math.max(0,Math.round(soh*100)/100);
+}
+/* was this location actually counted in that week's stocktake? */
+function countedAt(locId,wk){
+  const st=S.stock.find(s=>s.weekStart===wk);
+  return !!(st&&st.entries&&st.entries.some(e=>e.locationId===locId));
+}
 function openingSOH(sku,locId){
   const st=S.stock.find(s=>s.weekStart<=S.config.currentWeek)||S.stock[0];
   if(st&&st.entries){
@@ -531,7 +563,9 @@ function openingSOH(sku,locId){
     if(skuCounted&&locCounted) return 0;
   }
   const v=at(sku,"soh",histLoc(sku,"soh",locId),S.config.currentWeek);
-  return v==null?0:v;
+  if(v!=null) return v;
+  const est=estimateSOH(sku,locId,S.config.currentWeek);
+  return est==null?0:est;
 }
 /* history is keyed by location NAME (as imported); accept either */
 function histLoc(sku,field,locId){
@@ -875,7 +909,10 @@ function compute(sku){
       opening:openingSOH(sku,l.id),
       pastOut:past.map(w=>at(sku,"out",kOut,w)),
       pastDraw:past.map(w=>at(sku,drawField,drawKey,w)),
-      pastSoh:past.map(w=>at(sku,"soh",kSoh,w))});
+      /* this week's cell falls back to the carried-forward estimate, so the row
+         doesn't go blank on a channel nobody counts */
+      pastSoh:past.map(w=>{const v=at(sku,"soh",kSoh,w);
+        return v!=null?v:(w>=cw?estimateSOH(sku,l.id,w):null);})});
   }
   const totalShip=weeks.map((_,k)=>sum(rows.map(r=>r.ship[k]||0)));
   const beerIn=beerInFor(sku,weeks);
@@ -1765,6 +1802,15 @@ function weekChoices(){
 }
 function actualOut(sku,locId,wk){ return at(sku,"out",histLoc(sku,"out",locId),wk); }
 
+/* A reported stock on hand is the same kind of fact as a count: it fixes that
+   week's drawdown, and the week after it, since both are worked out from it. */
+function setTheirSOH(sku,locId,wk,val){
+  histSet(sku,"soh",locId,wk,num(val));
+  deriveUsed(sku,locId,wk);
+  deriveUsed(sku,locId,wkAdd(wk,1));
+  S.calcCache=null;
+  queueHistSave(sku);
+}
 function setActual(sku,locId,wk,val){
   const v=num(val);
   histSet(sku,"out",locId,wk,v);
@@ -1830,9 +1876,11 @@ function viewActuals(pane,ctl){
   pane.append(t);
 
   pane.append(el("div",{class:"note"},el("b",{},"What to fill in. "),
-    "Only what left the brewery — one figure per channel. Stock on hand comes from the week's ",
-    "stocktake, and each distributor's drawdown is worked out from it: what they held last week, ",
-    "plus whatever landed, less what they hold now. Those two columns fill themselves."));
+    "What left the brewery, one figure per channel — and, for the chains and anyone else we don't ",
+    "count, what they report holding. Where a location was counted, its stock on hand comes from ",
+    "the stocktake and can't be typed; where it wasn't, the cell carries forward from the last ",
+    "figure there was, in grey, until you put the real one over it. Either way the drawdown works ",
+    "itself out: what they held last week, plus whatever landed, less what they hold now."));
 
   if(!st) pane.append(el("div",{class:"card"},el("div",{class:"body"},
     el("div",{class:"note",style:"border-color:var(--warn)"},
@@ -1862,11 +1910,29 @@ function viewActuals(pane,ctl){
         value:cur!=null?n0(cur):"", placeholder:"—",
         onfocus:e=>e.target.select(), onkeydown:e=>stepCell(e),
         onchange:e=>{setActual(sku.id,l.id,wk,e.target.value);render();}});
+      /* counted locations get their stock on hand from the count. The chains
+         and the rest nobody counts take it here, pre-filled with the carried
+         forward estimate so the cell is never simply empty. */
+      const counted=tracks&&countedAt(l.id,wk);
+      let sohCell;
+      if(tracks&&!counted){
+        const est=soh==null?estimateSOH(sku.id,l.id,wk):null;
+        sohCell=el("td",{class:"cell"},el("input",{class:"cellinp num qty",type:"text",
+          inputmode:"decimal",value:soh!=null?n0(soh):"",
+          placeholder:est==null?"—":n0(est),
+          title:soh!=null?"What they reported holding. Their drawdown is worked out from it."
+            :(est==null?"No figure to carry forward yet"
+              :"Carried forward from the last figure there was — type what they report and the drawdown becomes exact"),
+          onfocus:e=>e.target.select(), onkeydown:e=>stepCell(e),
+          onchange:e=>{setTheirSOH(sku.id,l.id,wk,e.target.value);render();}}));
+      }else{
+        sohCell=el("td",{class:"num "+(soh==null?"dim":"")},soh==null?"—":n0(soh));
+      }
       body.append(el("tr",{"data-zero":String(cur==null)},
         el("td",{},el("b",{},l.name)),
         el("td",{class:"dim"},LOCTYPE[l.type]),
         el("td",{class:"cell"},inp),
-        el("td",{class:"num "+(soh==null?"dim":"")},soh==null?"—":n0(soh)),
+        sohCell,
         el("td",{class:"num "+(used==null?"dim":"")},used==null?"—":n0(used)),
         el("td",{class:"num dim"},ly==null?"—":n0(ly))));
     }
