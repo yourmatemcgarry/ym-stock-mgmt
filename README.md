@@ -243,6 +243,14 @@ out of the two together — what they held last week, plus whatever landed that
 week, less what they hold now. **Recalculate from stocktakes**, on the Stocktake
 screen, redoes that for every week if a count is corrected after the fact.
 
+A count started by mistake can be thrown away: pick its week on the Stocktake
+screen and press **Delete**. It takes with it the stock on hand it wrote into
+the weekly history, and the drawdowns worked out from those figures — but only
+where the stored figure is still the one that count put there, so anything typed
+or imported over the top since survives. The dialog says which of the two cases
+applies before you commit. A week that also came from the sheet comes back on
+the next import.
+
 Those figures land in the same weekly history the forecast reads, so prior year
 and recent average keep working from the app's own record rather than needing
 another export from the sheet.

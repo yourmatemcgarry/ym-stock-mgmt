@@ -1514,6 +1514,8 @@ function viewStocktake(pane,ctl){
       flash(n.size?("Stock on hand and drawdown refreshed for "+n.size+" SKUs"):"Already up to date");
       render();
     }},"Recalculate from stocktakes"));
+  if(st) ctl.append(el("button",{class:"btn",title:"Delete this count and the stock on hand it wrote",
+    onclick:()=>deleteStocktake(st)},"Delete"));
   ctl.append(el("button",{class:"btn pri",onclick:newStocktake},"New stocktake"));
   if(!st){
     pane.append(el("div",{class:"card"},el("div",{class:"empty"},el("b",{},"No stocktakes yet"),
@@ -1626,6 +1628,56 @@ function stepCell(ev){
   if(to){ ev.preventDefault(); to.focus(); if(to.select) to.select(); }
 }
 
+/* Deleting a count started by mistake. The figures it wrote into the weekly
+   history go with it — but only where the stored figure is still the one this
+   count put there, so anything typed or imported over the top since is left
+   alone. The drawdowns worked out from those figures go too, since they were
+   only ever an arithmetic consequence of them. */
+function deleteStocktake(st){
+  const lines=(st.entries||[]).length;
+  const owned=()=>{
+    const by={};
+    for(const e of (st.entries||[])){
+      const k=skuId(e.productId,e.pack)+"|"+e.locationId;
+      by[k]=(by[k]||0)+(e.qty||0);
+    }
+    const hits=[];
+    for(const k of Object.keys(by)){
+      const [sku,loc]=k.split("|");
+      if(!S.hist[sku]) continue;
+      const cur=at(sku,"soh",histLoc(sku,"soh",loc),st.weekStart);
+      if(cur!=null&&Math.abs(cur-by[k])<0.001) hits.push([sku,loc]);
+    }
+    return hits;
+  };
+  const hits=owned();
+  openDialog("Delete the stocktake for w/c "+fmtWY(st.weekStart),b=>{
+    b.append(el("div",{class:"note"},
+      el("b",{},lines+" counted line"+(lines===1?"":"s")+" will go. "),
+      hits.length?("The stock on hand it wrote goes too — "+hits.length+" figure"+
+        (hits.length===1?"":"s")+" across the weekly history, with the drawdowns worked out from them. ")
+        :"Nothing in the weekly history still carries this count's figures, so only the count itself goes. ",
+      "Anything typed or imported over the top since is left alone."));
+    b.append(el("div",{class:"hint"},
+      "If this week also came from the Stock Management Sheet, the next import brings it back."));
+  },()=>{
+    const touched=new Set();
+    for(const [sku,loc] of hits){
+      histSet(sku,"soh",loc,st.weekStart,null);
+      histSet(sku,"used",loc,st.weekStart,null);
+      touched.add(sku);
+    }
+    S.stock=S.stock.filter(x=>x.id!==st.id);
+    remove("stocktakes",st.id);
+    for(const sku of touched){
+      for(const l of activeLocs()) deriveUsed(sku,l.id,wkAdd(st.weekStart,1));
+      persist("history",stripIx(S.hist[sku]));
+    }
+    if(stWeek===st.weekStart) stWeek=null;
+    S.calcCache=null;
+    flash("Stocktake for w/c "+fmtWY(st.weekStart)+" deleted");
+  },"Delete stocktake");
+}
 function newStocktake(){
   const last=S.stock[0];
   openDialog("New stocktake",b=>{
