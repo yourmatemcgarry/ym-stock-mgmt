@@ -1117,6 +1117,12 @@ function skuGrid(s,c){
     el("button",{class:"btn sm",title:"Choose which distributors and channels this SKU goes to",
       onclick:ev=>{ev.stopPropagation();editChannels(s);}},
       c.rows.length+" channel"+(c.rows.length===1?"":"s")),
+    (()=>{if(!typedEntries(s.id,null).length) return null;
+      const n=typedCount(s.id);
+      return el("button",{class:"btn sm",style:"margin-left:6px",
+        title:"Clear typed figures in bulk and hand those weeks back to the forecast",
+        onclick:ev=>{ev.stopPropagation();clearTyped(s);}},
+        n?(n+" typed over"):"Typed figures");})(),
     (()=>{const m=planOf(s.id).model;
       /* only worth offering where there's no history to forecast from, or one is already set */
       if(!(m&&m.sku)&&skuHasOwnHistory(s.id)) return null;
@@ -1326,6 +1332,112 @@ function setPlanned(sku,loc,wk,val){const pl=planOf(sku);pl.planned[loc]=pl.plan
   persist("plan",pl);render();}
 function setBasis(sku,loc,v){const pl=planOf(sku);pl.basis[loc]=v;persist("plan",pl);render();}
 function setMethod(sku,loc,v){const pl=planOf(sku);pl.method[loc]=v;persist("plan",pl);render();}
+/* ---- clearing typed figures in bulk ----
+   A week that has been typed over stops following the forecast until the cell is
+   emptied again. After a busy week that is a lot of cells to go back through one
+   at a time, so this lists everywhere a figure has been typed and clears whole
+   rows of them at once. */
+const TYPED_KIND={override:"known order",planned:"order plan",manual:"typed figure"};
+function typedEntries(sku,from){
+  const pl=planOf(sku), out=[];
+  for(const field of ["override","planned","manual"]){
+    const d=pl[field]||{};
+    for(const loc in d){
+      const weeks=Object.keys(d[loc]||{})
+        .filter(w=>d[loc][w]!=null&&(!from||w>=from)).sort();
+      if(weeks.length) out.push({sku,field,loc,weeks});
+    }
+  }
+  return out;
+}
+/* The count on the button is overrides only — figures holding a week against a
+   calculation. A distributor's order plan is their figure rather than ours, and
+   a direct channel on manual entry is simply how that channel is forecast, so
+   neither is an override. The dialog still lists the lot. */
+function typedCount(sku){
+  return typedEntries(sku,S.config.currentWeek).filter(e=>{
+    if(e.field==="override") return true;
+    if(e.field!=="manual") return false;
+    const l=L(e.loc);
+    return !!l&&l.type!=="direct";
+  }).reduce((n,e)=>n+e.weeks.length,0);
+}
+function clearTyped(s){
+  const cw=S.config.currentWeek;
+  let scope="sku", from=cw;
+  const picked=new Set();
+  const key=e=>e.sku+"|"+e.field+"|"+e.loc;
+  const entries=()=>(scope==="all"?skus().map(x=>x.id):[s.id])
+    .reduce((a,id)=>a.concat(typedEntries(id,from||null)),[]);
+  const list=el("div",{style:"max-height:46vh;overflow:auto"});
+  const tally=el("div",{class:"hint"},"");
+  const count=()=>{
+    const es=entries().filter(e=>picked.has(key(e)));
+    const n=es.reduce((a,e)=>a+e.weeks.length,0);
+    tally.textContent=n?("Clearing "+n+" figure"+(n===1?"":"s")+" across "+es.length+
+      " row"+(es.length===1?"":"s")):"Nothing ticked";
+  };
+  const draw=()=>{
+    clear(list); picked.clear();
+    const es=entries();
+    if(!es.length){ list.append(el("div",{class:"empty"},"Nothing has been typed over.")); count(); return; }
+    /* only known orders typed over a calculated top-up start ticked. The order
+       plans are the distributors' own figures and the manual figures largely
+       came across from the sheet, so clearing those is a deliberate act, not a
+       default — "Tick all" is one click away. */
+    for(const e of es) if(e.field==="override") picked.add(key(e));
+    for(const e of es){
+      list.append(el("label",{class:"row",style:"gap:10px;align-items:center;padding:5px 2px;cursor:pointer"},
+        el("input",{type:"checkbox",checked:picked.has(key(e)),
+          onchange:ev=>{ev.target.checked?picked.add(key(e)):picked.delete(key(e));count();}}),
+        el("span",{style:"flex:1"},
+          (scope==="all"?skuLabel(e.sku)+"  ·  ":"")+((L(e.loc)||{}).name||e.loc),
+          el("span",{class:"dim"},"  ·  "+TYPED_KIND[e.field])),
+        el("span",{class:"hint"},e.weeks.length+" wk"+(e.weeks.length===1?"":"s")+"  ·  "+
+          fmtD(e.weeks[0])+(e.weeks.length>1?" – "+fmtD(e.weeks[e.weeks.length-1]):""))));
+    }
+    count();
+  };
+  const tickAll=on=>{
+    for(const cb of list.querySelectorAll("input[type=checkbox]")){
+      if(cb.checked!==on){ cb.checked=on; cb.dispatchEvent(new Event("change")); }
+    }
+  };
+  openDialog("Clear typed figures",b=>{
+    b.append(el("div",{class:"note"},el("b",{},"Typed figures hold their week against the forecast. "),
+      "Clearing one hands that week back to the calculation. Known orders you have typed over a "+
+      "top-up start ticked; the distributors' order plans and the manual figures that came across "+
+      "from the sheet don't, so nothing goes by accident — tick all if you do want the lot. "+
+      "Actuals already shipped aren't touched."));
+    b.append(el("div",{class:"grid2"},
+      field("Which SKUs",sel([["sku",skuLabel(s.id)],["all","Every SKU"]],scope,
+        {onchange:e=>{scope=e.target.value;draw();}})),
+      field("Which weeks",sel([[cw,"This week and after"],["","Every week, including past"]],cw,
+        {onchange:e=>{from=e.target.value||null;draw();}}))));
+    b.append(el("div",{class:"row",style:"gap:8px"},
+      el("button",{class:"btn sm",type:"button",onclick:()=>tickAll(true)},"Tick all"),
+      el("button",{class:"btn sm",type:"button",onclick:()=>tickAll(false)},"Tick none"),
+      el("span",{style:"flex:1"}),tally));
+    b.append(list); draw();
+  },()=>{
+    const es=entries().filter(e=>picked.has(key(e)));
+    if(!es.length){ flash("Nothing ticked"); return false; }
+    let n=0; const touched=new Set();
+    for(const e of es){
+      const pl=planOf(e.sku), d=pl[e.field][e.loc]||{};
+      for(const w of e.weeks) if(d[w]!=null){ delete d[w]; n++; }
+      if(!Object.keys(d).length) delete pl[e.field][e.loc];
+      /* a channel that went to manual entry only because a figure was typed is
+         left pointing at nothing, so hand it back to the default basis */
+      if(e.field==="manual"&&pl.basis&&pl.basis[e.loc]==="manual"&&
+         !Object.keys(pl.manual[e.loc]||{}).length) delete pl.basis[e.loc];
+      touched.add(e.sku);
+    }
+    for(const id of touched) persist("plan",planOf(id));
+    S.calcCache=null;
+    flash(n+" typed figure"+(n===1?"":"s")+" cleared");
+  },"Clear selected");
+}
 function saveConfig(){persist("config",Object.assign({id:"app"},S.config));}
 </script>
 <script>

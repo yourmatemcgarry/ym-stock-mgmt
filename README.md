@@ -146,6 +146,14 @@ Taken from the conventions in the original sheet:
   typed figure is a known order and is used instead of the calculated one for
   that week, and clearing the cell hands it back to the calculation. Typed
   figures show in bold.
+- To undo a lot of those at once, each SKU's header has a **typed over** button.
+  It lists every channel holding typed figures — known orders, order plans and
+  manual figures, with how many weeks each covers — and clears whole rows in one
+  go, for that SKU or every SKU, from this week on or including the past. Only
+  known orders typed over a top-up are ticked to begin with, so a distributor's
+  order plan or the sheet's own manual figures are never cleared by accident.
+  A channel left on manual entry with nothing in it goes back to the default
+  basis.
 - The coldroom is shown at both ends of each week — **start of week**, then beer
   in from packaging runs, then everything shipped out, then **end of week**. A
   week that can't be got through shows as a negative at the end of it, which is
