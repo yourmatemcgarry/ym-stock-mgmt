@@ -129,6 +129,19 @@ Taken from the conventions in the original sheet:
   8 weeks), **manual** (only the weeks you type; the rest fall back to prior
   year), **flat number**, or **like another SKU**. The drawdown row itself takes
   typed figures, same as the shipping row.
+- **Recent average follows the season.** Where a SKU and a channel have a year or
+  more behind them, the level carried forward is the recent weeks with their own
+  seasonality taken out, scaled by how that week of the year has sat against its
+  own year — averaged over however many prior years there are. Without that
+  history it stays the plain average, unchanged.
+
+  Shipments are lumpy, so the season is read over a wide window (±8 weeks),
+  leant on gently (70%), and ignored where the years disagree. Those settings
+  were chosen by measurement, not taste: re-forecasting every SKU over every
+  13-week window of the last year, the error on the quarter's cartons went
+  **30.2% (flat average) → 24.3%**, where prior year alone was 37.9% and a raw
+  unsmoothed seasonal factor was worse than doing nothing at 36.9%. It aims at
+  the quarter, not at timing the peak week.
 - **Flat number** is the quick one: type a figure into any forecast week and it
   holds for every week after it, until another figure is typed over the top.
   Weeks before the first entry keep the ordinary forecast, so a figure put
@@ -174,8 +187,17 @@ table of every distributor and channel with the change against each. Periods end
 at the last *full* week, so a part-shipped current week never flatters the
 comparison.
 
+**Trend** puts the weeks behind and the weeks ahead on one timeline: what shipped
+each week this year, the forecast carrying on from it as a dashed line, and the
+same weeks of the last two years underneath. Totals for both halves sit above it
+— shipped over the window behind, forecast over the window ahead, each against
+the same weeks a year and two years back — with a tile that compares the two: if
+the year behind is down 12% and the year ahead is forecast down 8%, the forecast
+is four points more bullish than the run rate, which is either a decision or an
+oversight. Tables underneath break both halves down by channel.
+
 **Forecast accuracy** re-predicts each past week from only what was known before
-it — the same week a year earlier, or the trailing 8-week average running into it
+it — the same week a year earlier, or the seasonal recent average running into it
 — and compares both with what actually shipped. The average weekly miss per
 channel says which basis is worth trusting for that SKU, with a button to set it.
 

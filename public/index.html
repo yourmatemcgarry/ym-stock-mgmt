@@ -152,6 +152,7 @@ tbody tr[data-zero="true"] input.cellinp.qty:focus{background:var(--accent-soft)
 .viz-axis{fill:var(--faint);font:500 10px var(--mono)}
 .viz-label{fill:var(--muted);font:600 11px var(--sans)}
 .viz-cross{stroke:var(--line);stroke-width:1;stroke-dasharray:3 3}
+.viz-mark{stroke:var(--ink-3,var(--muted));stroke-width:1;stroke-dasharray:2 4;opacity:.7}
 .viz-tip{position:absolute;top:4px;background:var(--surface);border:1px solid var(--line);
   border-radius:var(--r);box-shadow:var(--shadow);padding:8px 10px;font-size:12px;
   pointer-events:none;min-width:150px;z-index:2}
@@ -331,7 +332,7 @@ const PACK_SHELF={"Can":12,"10 Pack":12,"Keg":6,"30L Keg":6};
 const BASES={prior_year:"Prior year",recent_avg:"Recent average",manual:"Manual entry",
              flat:"Flat number",model:"Like another SKU",planned:"Distributor plan"};
 const BASIS_HINT={prior_year:"The same week a year ago",
-  recent_avg:"The average of the last few weeks",
+  recent_avg:"The average of the last few weeks, shaped by how that week usually sits in the year",
   manual:"Only the weeks you type; the rest fall back to prior year",
   flat:"Type one figure and it holds every week after, until you type another",
   model:"Follows another SKU's history",planned:"What the distributor has told us"};
@@ -774,10 +775,95 @@ function modelAt(sku,field,locId,wk){
   }
   return null;
 }
+/* ---- seasonality ----
+   A flat average of the last few weeks says December looks like October, which
+   for beer in Queensland it does not. Where a SKU and a channel have a year or
+   more behind them, each forecast week is scaled by how that week has sat
+   against its own year, averaged over however many prior years there are.
+   Without that history nothing changes: it stays the plain average. */
+const SEASON_BACK=[52,104,156];
+/* Within the span of the history a blank week means nothing moved that week,
+   not that nobody knows — and a quiet week is part of the season. Outside the
+   span there is simply no year to read. */
+function seasonVal(sku,field,locKey,wk){
+  const h=H(sku);
+  if(!h||!h._ix||h._ix[wk]==null) return null;
+  const v=at(sku,field,locKey,wk);
+  return v==null?0:v;
+}
+function yearLevels(sku,field,locKey){
+  const cw=S.config.currentWeek;
+  return SEASON_BACK.map(back=>{
+    const v=[];
+    for(let i=0;i<52;i++){ const x=seasonVal(sku,field,locKey,wkAdd(cw,-back-i)); if(x!=null) v.push(x); }
+    /* a part year tells us nothing about the shape of a whole one */
+    return v.length>=30?v.reduce((a,b)=>a+b,0)/v.length:null;
+  });
+}
+/* Settings chosen by measurement, not taste: re-forecasting every SKU over
+   every 13-week window of the last year, the error on the quarter's cartons
+   went 30.2% (flat average) -> 24.3% with these, where a raw unsmoothed factor
+   made it worse than doing nothing at 36.9%. Shipments are lumpy — one big drop
+   lands in week 47 one year and week 46 the next — so the season has to be read
+   over a wide window, leant on gently, and ignored where the years disagree. */
+const SEASON_SMOOTH=8, SEASON_DAMP=0.7, SEASON_AGREE=0.4;
+function seasonFactor(sku,field,locKey,wk,levels){
+  const fs=[];
+  SEASON_BACK.forEach((back,i)=>{
+    const lvl=levels[i];
+    if(!lvl||lvl<=0) return;
+    const centre=wkAdd(wk,-back), near=[];
+    /* the week and the weeks around it — one odd week is not a season */
+    for(let d=-SEASON_SMOOTH;d<=SEASON_SMOOTH;d++){
+      const v=seasonVal(sku,field,locKey,wkAdd(centre,d)); if(v!=null) near.push(v); }
+    if(near.length<SEASON_SMOOTH+1) return;
+    fs.push((near.reduce((a,b)=>a+b,0)/near.length)/lvl);
+  });
+  if(!fs.length) return null;
+  const m=fs.reduce((a,b)=>a+b,0)/fs.length;
+  if(fs.length>1){
+    const sd=Math.sqrt(fs.reduce((a,f)=>a+(f-m)*(f-m),0)/fs.length);
+    if(sd>SEASON_AGREE) return null;   /* the years tell different stories */
+  }
+  return Math.max(0.2,Math.min(4,1+SEASON_DAMP*(m-1)));
+}
+/* the recent weeks with their own seasonality taken out, so the level we carry
+   forward isn't itself a summer or a winter number */
+function deseasonalLevel(sku,field,locKey,endWk,avgWin,levels){
+  const v=[];
+  for(let i=1;i<=avgWin;i++){
+    const w=wkAdd(endWk,-i), x=at(sku,field,locKey,w);
+    if(x==null) continue;
+    const f=seasonFactor(sku,field,locKey,w,levels);
+    v.push(f?x/f:x);
+  }
+  return v.length?v.reduce((a,b)=>a+b,0)/v.length:null;
+}
+/* one week's seasonal recent average — shared with the Review backtest so the
+   two can't drift apart */
+function seasonalMean(sku,field,locKey,wk,avgWin,levels){
+  levels=levels||yearLevels(sku,field,locKey);
+  const f=seasonFactor(sku,field,locKey,wk,levels);
+  /* the level comes from the weeks before this one — and for a week still
+     ahead of us, from the weeks before this one in real life */
+  const cw=S.config.currentWeek;
+  const lvl=deseasonalLevel(sku,field,locKey,wk>cw?cw:wk,avgWin,levels);
+  if(lvl==null) return null;
+  return f==null?lvl:lvl*f;
+}
+
 function forecastSeries(sku,field,locKey,weeks,basis,manualMap,avgWin,locId){
   const cw=S.config.currentWeek;
   const avg=avgOf(sku,field,locKey,cw,avgWin);
   const ownHistory=tail(sku,field,locKey,cw,avgWin).length>0;
+  let lv=null, lvl0;                      /* worked out once per series */
+  const seasonal=w=>{
+    if(lv===null){ lv=yearLevels(sku,field,locKey);
+      lvl0=deseasonalLevel(sku,field,locKey,cw,avgWin,lv); }
+    if(lvl0==null) return null;
+    const f=seasonFactor(sku,field,locKey,w,lv);
+    return f==null?null:lvl0*f;
+  };
   /* "Flat number": the last figure typed at or before this week holds, so one
      entry carries forward for good until another is typed over the top of it.
      Weeks before the first entry fall through to the normal bases below, which
@@ -793,7 +879,7 @@ function forecastSeries(sku,field,locKey,weeks,basis,manualMap,avgWin,locId){
     if(basis==="manual"&&manualMap&&manualMap[w]!=null) return manualMap[w];
     if(basis==="flat"){ const f=flatAt(w); if(f!=null) return f; }
     if(basis==="model"){ const m=modelAt(sku,field,locId,w); if(m!=null) return m; }
-    if(basis==="recent_avg"&&ownHistory) return avg;
+    if(basis==="recent_avg"&&ownHistory){ const s=seasonal(w); return s==null?avg:s; }
     const py=at(sku,field,locKey,wkAdd(w,-52));
     if(py!=null) return py;
     const m=modelAt(sku,field,locId,w);     /* nothing of our own for this week */
@@ -1927,16 +2013,18 @@ function niceTicks(lo,hi,n){
   return out;
 }
 
-/* series: [{name, values:[n|null], dash}]  x: [labels]  */
+/* series: [{name, values:[n|null], dash, color, label}]  x: [labels]
+   markAt/markLabel draw a rule where the record stops and the forecast starts */
 function lineChart(opts){
   const S_=opts.series.filter(s=>s.values.some(v=>v!=null));
+  const col=i=>S_[i].color||VIZ.of(i);
   const wrap=el("figure",{class:"viz"});
   if(opts.title) wrap.append(el("figcaption",{},opts.title,
     opts.note?el("span",{class:"hint"}," "+opts.note):null));
   if(S_.length>1){
     const lg=el("div",{class:"viz-legend"});
     S_.forEach((s,i)=>lg.append(el("span",{class:"viz-key"},
-      el("i",{style:"background:"+VIZ.of(i)+(s.dash?";opacity:.85":"")}),s.name)));
+      el("i",{style:"background:"+col(i)+(s.dash?";opacity:.85":"")}),s.name)));
     wrap.append(lg);
   }
   const W=760,Hh=250,L=56,R=152,T=20,B=30;
@@ -1969,13 +2057,13 @@ function lineChart(opts){
     const pts=[];
     s.values.forEach((v,k)=>{ if(v!=null) pts.push(px(k)+","+py(v)); });
     if(!pts.length) return;
-    svg.append(svgEl("polyline",{points:pts.join(" "),fill:"none",stroke:VIZ.of(i),
+    svg.append(svgEl("polyline",{points:pts.join(" "),fill:"none",stroke:col(i),
       "stroke-width":2,"stroke-linejoin":"round","stroke-linecap":"round",
       "stroke-dasharray":s.dash||null}));
     let last=-1; s.values.forEach((v,k)=>{ if(v!=null) last=k; });
-    if(last>=0){
+    if(last>=0&&s.label!==false){
       svg.append(svgEl("circle",{cx:px(last),cy:py(s.values[last]),r:4,
-        fill:VIZ.of(i),stroke:"var(--surface)","stroke-width":2}));
+        fill:col(i),stroke:"var(--surface)","stroke-width":2}));
       ends.push({i,x:px(last),y:py(s.values[last]),
                  text:s.name+"  "+n0(s.values[last])});
     }
@@ -1990,6 +2078,12 @@ function lineChart(opts){
     t.textContent=e.text; svg.append(t);
   });
 
+  if(opts.markAt!=null&&opts.markAt>=0&&opts.markAt<n){
+    svg.append(svgEl("line",{x1:px(opts.markAt),x2:px(opts.markAt),y1:T,y2:Hh-B,
+      class:"viz-mark"}));
+    const ml=svgEl("text",{x:px(opts.markAt)+5,y:T+10,class:"viz-axis","text-anchor":"start"});
+    ml.textContent=opts.markLabel||"now"; svg.append(ml);
+  }
   const cross=svgEl("line",{x1:0,x2:0,y1:T,y2:Hh-B,class:"viz-cross",opacity:0});
   svg.append(cross);
   const hit=svgEl("rect",{x:L,y:T,width:Math.max(1,W-L-R),height:Hh-T-B,
@@ -2008,7 +2102,7 @@ function lineChart(opts){
     tip.append(el("b",{},opts.x[i]));
     S_.forEach((s,k)=>{ if(s.values[i]==null) return;
       tip.append(el("div",{class:"viz-tiprow"},
-        el("i",{style:"background:"+VIZ.of(k)}),
+        el("i",{style:"background:"+col(k)}),
         el("span",{},s.name),el("b",{},n0(s.values[i]))));});
     const leftPct=(px(i)/W)*100;
     tip.style.left=Math.min(78,Math.max(2,leftPct))+"%";
@@ -2025,7 +2119,7 @@ function lineChart(opts){
    which forecast basis has actually been predicting us well. Both read the
    same weekly history the forecast runs on. */
 
-let revSku = null, revWeeks = 52, revTab = "yoy";
+let revSku = null, revWeeks = 52, revFwd = 26, revTab = "yoy";
 
 function reviewSkus(){
   return skus().filter(s=>S.hist[s.id]&&s.product.forecast!==false);
@@ -2067,113 +2161,184 @@ function viewReview(pane,ctl){
   const sku=reviewSku();
   ctl.append(sel(list.map(s=>[s.id,s.product.name+" "+s.pack]),sku,
     {onchange:e=>{revSku=e.target.value;render();}}));
-  ctl.append(sel([[52,"52 weeks"],[26,"26 weeks"],[13,"13 weeks"]],revWeeks,
+  ctl.append(sel([[52,"52 wks back"],[26,"26 wks back"],[13,"13 wks back"]],revWeeks,
     {onchange:e=>{revWeeks=+e.target.value;render();}}));
+  if(revTab==="yoy") ctl.append(sel([[13,"13 wks on"],[26,"26 wks on"],[52,"52 wks on"]],revFwd,
+    {onchange:e=>{revFwd=+e.target.value;render();}}));
   const seg=el("div",{class:"packtabs"});
-  for(const [k,lab] of [["yoy","Year on year"],["acc","Forecast accuracy"]])
+  for(const [k,lab] of [["yoy","Trend"],["acc","Forecast accuracy"]])
     seg.append(el("button",{"aria-pressed":String(revTab===k),
       onclick:()=>{revTab=k;render();}},lab));
   ctl.append(seg);
-  (revTab==="yoy"?reviewYoY:reviewAccuracy)(pane,sku);
+  (revTab==="yoy"?reviewTrend:reviewAccuracy)(pane,sku);
 }
 
-/* ---------------- year on year ---------------- */
-function reviewYoY(pane,sku){
+/* ---------------- the trend, behind and ahead ----------------
+   One question in two halves: are we shipping more or less than the last two
+   years, and does the forecast in front of us follow the same shape. Both are
+   drawn on one timeline so the forecast can be sense-checked against the years
+   it is meant to resemble. */
+
+/* weekly figures are lumpy; a four-week mean is what makes a season legible */
+function smooth(vals,w){
+  return vals.map((_,i)=>{
+    let t=0,n=0;
+    for(let k=Math.max(0,i-w+1);k<=i;k++){ if(vals[k]!=null){t+=vals[k];n++;} }
+    return n?t/n:null;
+  });
+}
+function weekTotal(sku,chans,wk){
+  let t=0,any=false;
+  for(const l of chans){ const v=outAt(sku,l.id,wk); if(v!=null){t+=v;any=true;} }
+  return any?t:null;
+}
+/* what the forecast says will go out, by channel and by week */
+function forwardView(sku,n){
+  const c=compute(sku), weeks=c.weeks.slice(0,n);
+  const byLoc={};
+  for(const r of c.rows) byLoc[r.loc.id]=r.ship.slice(0,n);
+  return {weeks,byLoc,total:weeks.map((_,k)=>sum(c.rows.map(r=>r.ship[k]||0)))};
+}
+function backTotal(sku,loc,endWk,n){ return periodTotal(sku,loc,endWk,n)||0; }
+function fwdPriorTotal(sku,loc,weeks,off){
+  let t=0;
+  for(const w of weeks){ const v=outAt(sku,loc,wkAdd(w,-off)); if(v!=null) t+=v; }
+  return t;
+}
+
+function reviewTrend(pane,sku){
   const end=lastFullWeek(), chans=reviewChannels(sku);
   const s=skus().find(x=>x.id===sku);
   const unit=(PACK_UNIT[s.pack]||"units").toLowerCase();
-  const tot=[0,52,104].map(off=>
-    chans.reduce((a,l)=>a+(periodTotal(sku,l.id,wkAdd(end,-off),revWeeks)||0),0));
-  const d1=pctChange(tot[0],tot[1]), d2=pctChange(tot[0],tot[2]);
+  const fwdN=Math.min(revFwd,S.config.horizon);
+  const fw=forwardView(sku,fwdN);
+
+  const back=[0,52,104].map(off=>
+    chans.reduce((a,l)=>a+backTotal(sku,l.id,wkAdd(end,-off),revWeeks),0));
+  const fwd=[sum(fw.total),
+    chans.reduce((a,l)=>a+fwdPriorTotal(sku,l.id,fw.weeks,52),0),
+    chans.reduce((a,l)=>a+fwdPriorTotal(sku,l.id,fw.weeks,104),0)];
+  const pc=(a,b)=>{const v=pctChange(a,b);return v==null?"—":(v>=0?"+":"")+v.toFixed(0)+"%";};
+  const tone=(a,b)=>{const v=pctChange(a,b);return v==null?"":v>=0?"good":"alert";};
 
   const t=el("div",{class:"tiles"});
-  t.append(tile("Shipped, last "+revWeeks+" weeks",n0(tot[0]),unit+" to "+fmtD(end)));
-  t.append(tile("Same period last year",n0(tot[1]),
-    d1==null?"—":(d1>=0?"+":"")+d1.toFixed(0)+"% this year",d1==null?"":d1>=0?"good":"alert"));
-  t.append(tile("Two years ago",n0(tot[2]),
-    d2==null?"—":(d2>=0?"+":"")+d2.toFixed(0)+"% this year",d2==null?"":d2>=0?"good":"alert"));
-  const moves=chans.map(l=>({l,now:periodTotal(sku,l.id,end,revWeeks)||0,
-    then:periodTotal(sku,l.id,wkAdd(end,-52),revWeeks)||0}))
-    .map(x=>Object.assign(x,{diff:x.now-x.then}));
-  const up=moves.slice().sort((a,b)=>b.diff-a.diff)[0];
-  const dn=moves.slice().sort((a,b)=>a.diff-b.diff)[0];
-  if(up) t.append(tile("Biggest gain",up.l.name,(up.diff>=0?"+":"")+n0(up.diff)+" "+unit,"good"));
-  if(dn) t.append(tile("Biggest fall",dn.l.name,n0(dn.diff)+" "+unit,"alert"));
+  t.append(tile("Shipped, last "+revWeeks+" wks",n0(back[0]),
+    pc(back[0],back[1])+" on last year · "+pc(back[0],back[2])+" on two years",
+    tone(back[0],back[1])));
+  t.append(tile("Forecast, next "+fwdN+" wks",n0(fwd[0]),
+    pc(fwd[0],fwd[1])+" on last year · "+pc(fwd[0],fwd[2])+" on two years",
+    tone(fwd[0],fwd[1])));
+  /* the sense check: if the year behind is down 11% and the year ahead is up
+     20%, the forecast is saying something the trade isn't */
+  const bk=pctChange(back[0],back[1]), fd=pctChange(fwd[0],fwd[1]);
+  if(bk!=null&&fd!=null){
+    const gap=fd-bk;
+    t.append(tile("Forecast against the run rate",(gap>=0?"+":"")+gap.toFixed(0)+" pts",
+      Math.abs(gap)<8?"in line with how the year has gone"
+        :(gap>0?"forecast is more bullish than the year behind it"
+               :"forecast is more cautious than the year behind it"),
+      Math.abs(gap)<8?"good":"warn"));
+  }
+  const moves=chans.map(l=>({l,
+    now:sum(fw.byLoc[l.id]||[]),then:fwdPriorTotal(sku,l.id,fw.weeks,52)}))
+    .map(x=>Object.assign(x,{diff:x.now-x.then})).sort((a,b)=>b.diff-a.diff);
+  if(moves.length) t.append(tile("Biggest change ahead",moves[0].l.name,
+    (moves[0].diff>=0?"+":"")+n0(moves[0].diff)+" "+unit+" vs last year",
+    moves[0].diff>=0?"good":"alert"));
+  if(moves.length>1){
+    const d=moves[moves.length-1];
+    t.append(tile("Biggest fall ahead",d.l.name,
+      (d.diff>=0?"+":"")+n0(d.diff)+" "+unit+" vs last year",d.diff>=0?"good":"alert"));
+  }
   pane.append(t);
 
-  /* cumulative is the honest shape here — the gap at the right edge is the answer */
-  const labels=periodWeeks(end,revWeeks).map(w=>fmtW(w));
-  const series=[["This year",0],["Last year",52],["Two years ago",104]].map(([name,off])=>{
-    let run=0, started=false;
-    return {name,values:periodWeeks(wkAdd(end,-off),revWeeks).map(w=>{
-      let week=0,any=false;
-      for(const l of chans){ const v=outAt(sku,l.id,w); if(v!=null){week+=v;any=true;} }
-      if(any) started=true;
-      run+=week; return started?run:null; })};
-  });
+  /* ---- one timeline: the weeks behind, then the weeks ahead ---- */
+  const bw=periodWeeks(end,revWeeks), allW=bw.concat(fw.weeks);
+  const SM=4;
+  const thisYr=smooth(bw.map(w=>weekTotal(sku,chans,w)),SM).concat(fw.weeks.map(()=>null));
+  /* the forecast carries on from the last actual so the line doesn't jump */
+  const fcRaw=bw.map(()=>null).concat(fw.total);
+  const joinFrom=Math.max(0,bw.length-SM);
+  for(let i=joinFrom;i<bw.length;i++) fcRaw[i]=weekTotal(sku,chans,bw[i]);
+  const fc=smooth(fcRaw,SM).map((v,i)=>i<bw.length-1?null:v);
+  const lastYr=smooth(allW.map(w=>weekTotal(sku,chans,wkAdd(w,-52))),SM);
+  const twoYr=smooth(allW.map(w=>weekTotal(sku,chans,wkAdd(w,-104))),SM);
+
   const c=el("div",{class:"card"});
-  c.append(el("header",{},el("h3",{},"Shipped out, running total")));
+  c.append(el("header",{},el("h3",{},"Shipped a week, against the last two years"),
+    el("span",{class:"hint"},SM+"-week average")));
   const body=el("div",{class:"body"});
-  body.append(lineChart({title:s.product.name+" "+s.pack+" — cumulative "+unit+" shipped",
-    note:"each line runs "+revWeeks+" weeks to the same point in its year",
-    x:labels,series}));
+  body.append(lineChart({
+    title:s.product.name+" "+s.pack+" — "+unit+" a week",
+    note:"actual to "+fmtD(end)+", forecast after it",
+    x:allW.map(w=>fmtW(w)),
+    markAt:bw.length-1, markLabel:"forecast →",
+    series:[{name:"This year",values:thisYr,color:"var(--viz-1)"},
+            {name:"Forecast",values:fc,color:"var(--viz-1)",dash:"5 4"},
+            {name:"Last year",values:lastYr,color:"var(--viz-2)"},
+            {name:"Two years ago",values:twoYr,color:"var(--viz-3)"}]}));
   c.append(body); pane.append(c);
 
-  const tc=el("div",{class:"card"});
-  tc.append(el("header",{},el("h3",{},"By distributor and channel"),
-    el("span",{class:"hint"},revWeeks+" weeks to "+fmtD(end))));
-  const w=el("div",{class:"scroll"}), tb=el("table");
-  tb.append(el("thead",{},el("tr",{},el("th",{},"Channel"),el("th",{},"Type"),
-    el("th",{class:"num"},"This year"),el("th",{class:"num"},"Last year"),
-    el("th",{class:"num"},"Two years ago"),el("th",{class:"num"},"vs last year"),
-    el("th",{class:"num"},"vs two years"),el("th",{},"Share"))));
-  const bd=el("tbody");
-  const rows=chans.map(l=>({l,v:[0,52,104].map(off=>periodTotal(sku,l.id,wkAdd(end,-off),revWeeks)||0)}))
-    .sort((a,b)=>b.v[0]-a.v[0]);
-  const top=rows.length?Math.max(...rows.map(r=>r.v[0])):1;
-  for(const {l,v} of rows){
-    const a=pctChange(v[0],v[1]), b2=pctChange(v[0],v[2]);
-    const pc=x=>x==null?el("td",{class:"num dim"},"—")
+  /* ---- the same thing per channel, both halves ---- */
+  const half=(title,hint,rows,totals)=>{
+    const card=el("div",{class:"card"});
+    card.append(el("header",{},el("h3",{},title),el("span",{class:"hint"},hint)));
+    const w=el("div",{class:"scroll"}), tb=el("table");
+    tb.append(el("thead",{},el("tr",{},el("th",{},"Channel"),el("th",{},"Type"),
+      el("th",{class:"num"},"This year"),el("th",{class:"num"},"Last year"),
+      el("th",{class:"num"},"Two years ago"),el("th",{class:"num"},"vs last year"),
+      el("th",{class:"num"},"vs two years"),el("th",{},"Share"))));
+    const bd=el("tbody");
+    const top=rows.length?Math.max(...rows.map(r=>r.v[0]),1):1;
+    const cell=x=>x==null?el("td",{class:"num dim"},"—")
       :el("td",{class:"num",style:"color:"+(x>=0?"var(--ok)":"var(--crit)")},
          (x>=0?"+":"")+x.toFixed(0)+"%");
-    bd.append(el("tr",{},
-      el("td",{},el("b",{},l.name)),
-      el("td",{class:"dim"},LOCTYPE[l.type]),
-      el("td",{class:"num"},n0(v[0])),
-      el("td",{class:"num dim"},n0(v[1])),
-      el("td",{class:"num dim"},n0(v[2])),
-      pc(a),pc(b2),
-      el("td",{},el("div",{class:"bar"},el("i",{style:"width:"+(top?v[0]/top*100:0)+"%"})))));
-  }
-  bd.append(el("tr",{class:"tot"},
-    el("td",{},el("b",{},"Total")),el("td",{}),
-    el("td",{class:"num"},el("b",{},n0(tot[0]))),
-    el("td",{class:"num"},n0(tot[1])),el("td",{class:"num"},n0(tot[2])),
-    d1==null?el("td",{}):el("td",{class:"num",style:"color:"+(d1>=0?"var(--ok)":"var(--crit)")},
-      (d1>=0?"+":"")+d1.toFixed(0)+"%"),
-    d2==null?el("td",{}):el("td",{class:"num",style:"color:"+(d2>=0?"var(--ok)":"var(--crit)")},
-      (d2>=0?"+":"")+d2.toFixed(0)+"%"),
-    el("td",{})));
-  tb.append(bd); w.append(tb); tc.append(w); pane.append(tc);
+    for(const {l,v} of rows){
+      bd.append(el("tr",{},
+        el("td",{},el("b",{},l.name)),
+        el("td",{class:"dim"},LOCTYPE[l.type]),
+        el("td",{class:"num"},n0(v[0])),
+        el("td",{class:"num dim"},n0(v[1])),
+        el("td",{class:"num dim"},n0(v[2])),
+        cell(pctChange(v[0],v[1])),cell(pctChange(v[0],v[2])),
+        el("td",{},el("div",{class:"bar"},el("i",{style:"width:"+(v[0]/top*100)+"%"})))));
+    }
+    bd.append(el("tr",{class:"tot"},
+      el("td",{},el("b",{},"Total")),el("td",{}),
+      el("td",{class:"num"},el("b",{},n0(totals[0]))),
+      el("td",{class:"num"},n0(totals[1])),el("td",{class:"num"},n0(totals[2])),
+      cell(pctChange(totals[0],totals[1])),cell(pctChange(totals[0],totals[2])),
+      el("td",{})));
+    tb.append(bd); w.append(tb); card.append(w); pane.append(card);
+  };
+  half("Behind us","the "+revWeeks+" weeks to "+fmtD(end),
+    chans.map(l=>({l,v:[0,52,104].map(off=>backTotal(sku,l.id,wkAdd(end,-off),revWeeks))}))
+      .sort((a,b)=>b.v[0]-a.v[0]), back);
+  half("Ahead of us","the "+fwdN+" weeks from "+fmtD(fw.weeks[0]||end),
+    chans.map(l=>({l,v:[sum(fw.byLoc[l.id]||[]),
+                        fwdPriorTotal(sku,l.id,fw.weeks,52),
+                        fwdPriorTotal(sku,l.id,fw.weeks,104)]}))
+      .sort((a,b)=>b.v[0]-a.v[0]), fwd);
 }
 
 /* ---------------- how well each basis has predicted ---------------- */
-function predictions(sku,loc,wk,avgWin){
+function predictions(sku,loc,wk,avgWin,levels){
   const py=outAt(sku,loc,wkAdd(wk,-52));
-  const hist=[]; for(let i=1;i<=avgWin;i++){
-    const v=outAt(sku,loc,wkAdd(wk,-i)); if(v!=null) hist.push(v);
-  }
-  const ra=hist.length?hist.reduce((a,b)=>a+b,0)/hist.length:null;
+  const key=histLoc(sku,"out",loc);
+  /* the same seasonal average the forecast runs on, re-predicted from only what
+     was known before that week */
+  const ra=seasonalMean(sku,"out",key,wk,avgWin,levels);
   return {prior_year:py,recent_avg:ra};
 }
 function accuracyFor(sku,loc,n,avgWin){
   const end=lastFullWeek(); let act=0,nw=0;
+  const levels=yearLevels(sku,"out",histLoc(sku,"out",loc));
   const err={prior_year:0,recent_avg:0}, cnt={prior_year:0,recent_avg:0};
   const pred={prior_year:0,recent_avg:0};
   for(const w of periodWeeks(end,n)){
     const a=outAt(sku,loc,w); if(a==null) continue;
     act+=a; nw++;
-    const p=predictions(sku,loc,w,avgWin);
+    const p=predictions(sku,loc,w,avgWin,levels);
     for(const k of ["prior_year","recent_avg"]){
       if(p[k]==null) continue;
       pred[k]+=p[k]; err[k]+=Math.abs(p[k]-a); cnt[k]++;
