@@ -129,24 +129,30 @@ Taken from the conventions in the original sheet:
   8 weeks), **manual** (only the weeks you type; the rest fall back to prior
   year), **flat number**, or **like another SKU**. The drawdown row itself takes
   typed figures, same as the shipping row.
-- **Recent average follows the season.** Where a SKU and a channel have a year or
-  more behind them, the level carried forward is the recent weeks with their own
-  seasonality taken out, scaled by how that week of the year has sat against its
-  own year — averaged over however many prior years there are. Without that
+- **Recent average follows the season.** Where a SKU and a channel have a year
+  or more behind them, the level carried forward is the recent weeks with their
+  own seasonality taken out, scaled by how that week of the year has sat against
+  its year — averaged over however many prior years there are. Without that
   history it stays the plain average, unchanged.
 
-  Shipments are lumpy, so the season is read over a wide window (±8 weeks),
-  leant on gently (70%), and ignored where the years disagree. Those settings
-  were chosen by measurement, not taste: re-forecasting every SKU over every
-  13-week window of the last year, the error on the quarter's cartons went
-  **30.2% (flat average) → 24.3%**, where prior year alone was 37.9% and a raw
-  unsmoothed seasonal factor was worse than doing nothing at 36.9%. It aims at
-  the quarter, not at timing the peak week.
-- **Flat number** is the quick one: type a figure into any forecast week and it
-  holds for every week after it, until another figure is typed over the top.
-  Weeks before the first entry keep the ordinary forecast, so a figure put
-  further out reads as a step change rather than rewriting everything in front
-  of it.
+  The week is measured against the year **centred on it**, not the year as a
+  whole. That matters: a channel that grew from 12 a week to 67 would otherwise
+  read its own growth as a season, every week of the lean year looking like a
+  multiple of that year's average. Against a centred year, trend cancels and
+  only the shape of the year is left.
+
+  Where the prior years disagree about a week, the factor is shrunk towards 1
+  rather than dropped — a noisy channel gets a gentle season, a consistent one
+  gets the whole of it. A year when the channel was under a quarter of its
+  present size is ignored outright: that is the business starting up, not a
+  winter.
+
+  Settings were chosen by measurement. Re-forecasting every SKU over every
+  13-week window of the last year and scoring the error on the quarter's
+  cartons: **flat average 30.2%, prior year 37.9%, seasonal 29.1%**. The season
+  is read over ±6 weeks — the narrowest window that scores as well as the widest.
+  An explicit trend term was tried and dropped: extrapolating a slope from lumpy
+  weekly shipments took the error to 43%.
 - Replenishment is either **their order plan** — typed straight into the grid,
   usually 13 weeks out — or **top up to a target stock level**: the week's
   shipment is the target less what they are holding that week. Their stock then

@@ -482,6 +482,7 @@ function histSet(sku,field,locId,wk,val){
   if(!h[field][locId]) h[field][locId]=new Array(n).fill(null);
   while(h[field][locId].length<n) h[field][locId].push(null);
   h[field][locId][i]=val;
+  h._season=null;              /* cached season levels are now out of date */
   return h;
 }
 /* A distributor's drawdown is never counted, it's what the movement implies:
@@ -791,63 +792,79 @@ function seasonVal(sku,field,locKey,wk){
   const v=at(sku,field,locKey,wk);
   return v==null?0:v;
 }
-function yearLevels(sku,field,locKey){
-  const cw=S.config.currentWeek;
-  return SEASON_BACK.map(back=>{
-    const v=[];
-    for(let i=0;i<52;i++){ const x=seasonVal(sku,field,locKey,wkAdd(cw,-back-i)); if(x!=null) v.push(x); }
-    /* a part year tells us nothing about the shape of a whole one */
-    return v.length>=30?v.reduce((a,b)=>a+b,0)/v.length:null;
-  });
+/* Settings chosen by measurement, not taste — see the backtest in the README.
+   Shipments are lumpy (one big drop lands in week 47 one year and week 46 the
+   next), so the season is read over a wide window and leant on gently. ±6 is
+   the narrowest window that scores as well as the widest, so it keeps as much
+   of the shape as the data will honestly support. An explicit trend term was
+   tried and dropped: extrapolating a slope from lumpy weekly shipments took
+   the error from 29% to 43%. */
+const SEASON_SMOOTH=6, SEASON_DAMP=0.7, SEASON_AGREE=0.4;
+
+/* The level a week sits against is the year CENTRED on it, not the year as a
+   whole. A channel that grew from 12 a week to 67 would otherwise read its own
+   growth as a season: every week of the lean year looks like a multiple of that
+   year's average. Against a centred year, trend cancels and only the shape of
+   the year is left. */
+function centredLevel(sku,field,locKey,wk){
+  const h=H(sku);
+  if(!h) return null;
+  const c=h._season||(h._season={});
+  const k=field+"|"+locKey+"|"+wk;
+  if(k in c) return c[k];
+  let t=0,n=0;
+  for(let d=-26;d<=25;d++){ const v=seasonVal(sku,field,locKey,wkAdd(wk,d)); if(v!=null){t+=v;n++;} }
+  return c[k]=(n>=30?t/n:null);
 }
-/* Settings chosen by measurement, not taste: re-forecasting every SKU over
-   every 13-week window of the last year, the error on the quarter's cartons
-   went 30.2% (flat average) -> 24.3% with these, where a raw unsmoothed factor
-   made it worse than doing nothing at 36.9%. Shipments are lumpy — one big drop
-   lands in week 47 one year and week 46 the next — so the season has to be read
-   over a wide window, leant on gently, and ignored where the years disagree. */
-const SEASON_SMOOTH=8, SEASON_DAMP=0.7, SEASON_AGREE=0.4;
-function seasonFactor(sku,field,locKey,wk,levels){
+function seasonFactor(sku,field,locKey,wk){
   const fs=[];
-  SEASON_BACK.forEach((back,i)=>{
-    const lvl=levels[i];
-    if(!lvl||lvl<=0) return;
-    const centre=wkAdd(wk,-back), near=[];
-    /* the week and the weeks around it — one odd week is not a season */
+  /* a year when this channel was a fraction of its present size has nothing to
+     say about its season — that is the business starting up, not a winter */
+  const now=centredLevel(sku,field,locKey,wkAdd(S.config.currentWeek,-26));
+  for(const back of SEASON_BACK){
+    const centre=wkAdd(wk,-back);
+    const lvl=centredLevel(sku,field,locKey,centre);
+    if(!lvl||lvl<=0) continue;
+    if(now&&lvl<now*0.25) continue;
+    let t=0,n=0;
     for(let d=-SEASON_SMOOTH;d<=SEASON_SMOOTH;d++){
-      const v=seasonVal(sku,field,locKey,wkAdd(centre,d)); if(v!=null) near.push(v); }
-    if(near.length<SEASON_SMOOTH+1) return;
-    fs.push((near.reduce((a,b)=>a+b,0)/near.length)/lvl);
-  });
+      const v=seasonVal(sku,field,locKey,wkAdd(centre,d)); if(v!=null){t+=v;n++;} }
+    if(n<SEASON_SMOOTH+1) continue;
+    fs.push((t/n)/lvl);
+  }
   if(!fs.length) return null;
   const m=fs.reduce((a,b)=>a+b,0)/fs.length;
+  /* Where the years tell different stories the figure is shrunk towards 1
+     rather than thrown away — a noisy channel gets a gentle season, a
+     consistent one gets the whole of it. Thrown away meant a dead flat
+     forecast, which is what this looked like from the outside. */
+  let trust=0.7;                                   /* one year is weak evidence */
   if(fs.length>1){
     const sd=Math.sqrt(fs.reduce((a,f)=>a+(f-m)*(f-m),0)/fs.length);
-    if(sd>SEASON_AGREE) return null;   /* the years tell different stories */
+    trust=1/(1+Math.pow(sd/SEASON_AGREE,2));
   }
-  return Math.max(0.2,Math.min(4,1+SEASON_DAMP*(m-1)));
+  return Math.max(0.2,Math.min(4,1+SEASON_DAMP*trust*(m-1)));
 }
 /* the recent weeks with their own seasonality taken out, so the level we carry
    forward isn't itself a summer or a winter number */
-function deseasonalLevel(sku,field,locKey,endWk,avgWin,levels){
+function deseasonalLevel(sku,field,locKey,endWk,avgWin){
   const v=[];
   for(let i=1;i<=avgWin;i++){
     const w=wkAdd(endWk,-i), x=at(sku,field,locKey,w);
     if(x==null) continue;
-    const f=seasonFactor(sku,field,locKey,w,levels);
+    const f=seasonFactor(sku,field,locKey,w);
     v.push(f?x/f:x);
   }
   return v.length?v.reduce((a,b)=>a+b,0)/v.length:null;
 }
 /* one week's seasonal recent average — shared with the Review backtest so the
    two can't drift apart */
-function seasonalMean(sku,field,locKey,wk,avgWin,levels){
-  levels=levels||yearLevels(sku,field,locKey);
-  const f=seasonFactor(sku,field,locKey,wk,levels);
+function seasonalMean(sku,field,locKey,wk,avgWin){
+  const f=seasonFactor(sku,field,locKey,wk);
   /* the level comes from the weeks before this one — and for a week still
      ahead of us, from the weeks before this one in real life */
   const cw=S.config.currentWeek;
-  const lvl=deseasonalLevel(sku,field,locKey,wk>cw?cw:wk,avgWin,levels);
+  const lvl=deseasonalLevel(sku,field,locKey,wk>cw?cw:wk,avgWin);
   if(lvl==null) return null;
   return f==null?lvl:lvl*f;
 }
@@ -856,12 +873,11 @@ function forecastSeries(sku,field,locKey,weeks,basis,manualMap,avgWin,locId){
   const cw=S.config.currentWeek;
   const avg=avgOf(sku,field,locKey,cw,avgWin);
   const ownHistory=tail(sku,field,locKey,cw,avgWin).length>0;
-  let lv=null, lvl0;                      /* worked out once per series */
+  let lvl0;                               /* worked out once per series */
   const seasonal=w=>{
-    if(lv===null){ lv=yearLevels(sku,field,locKey);
-      lvl0=deseasonalLevel(sku,field,locKey,cw,avgWin,lv); }
+    if(lvl0===undefined) lvl0=deseasonalLevel(sku,field,locKey,cw,avgWin);
     if(lvl0==null) return null;
-    const f=seasonFactor(sku,field,locKey,w,lv);
+    const f=seasonFactor(sku,field,locKey,w);
     return f==null?null:lvl0*f;
   };
   /* "Flat number": the last figure typed at or before this week holds, so one
@@ -2322,23 +2338,22 @@ function reviewTrend(pane,sku){
 }
 
 /* ---------------- how well each basis has predicted ---------------- */
-function predictions(sku,loc,wk,avgWin,levels){
+function predictions(sku,loc,wk,avgWin){
   const py=outAt(sku,loc,wkAdd(wk,-52));
   const key=histLoc(sku,"out",loc);
   /* the same seasonal average the forecast runs on, re-predicted from only what
      was known before that week */
-  const ra=seasonalMean(sku,"out",key,wk,avgWin,levels);
+  const ra=seasonalMean(sku,"out",key,wk,avgWin);
   return {prior_year:py,recent_avg:ra};
 }
 function accuracyFor(sku,loc,n,avgWin){
   const end=lastFullWeek(); let act=0,nw=0;
-  const levels=yearLevels(sku,"out",histLoc(sku,"out",loc));
   const err={prior_year:0,recent_avg:0}, cnt={prior_year:0,recent_avg:0};
   const pred={prior_year:0,recent_avg:0};
   for(const w of periodWeeks(end,n)){
     const a=outAt(sku,loc,w); if(a==null) continue;
     act+=a; nw++;
-    const p=predictions(sku,loc,w,avgWin,levels);
+    const p=predictions(sku,loc,w,avgWin);
     for(const k of ["prior_year","recent_avg"]){
       if(p[k]==null) continue;
       pred[k]+=p[k]; err[k]+=Math.abs(p[k]-a); cnt[k]++;
