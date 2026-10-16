@@ -173,6 +173,10 @@ tbody tr[data-zero="true"] input.cellinp.qty:focus{background:var(--accent-soft)
 
 /* ---------- tables ---------- */
 .scroll{overflow-x:auto;overscroll-behavior-x:contain}
+/* a sideways scroller has nothing for a sticky header to hold onto unless it
+   scrolls down as well, so a tall table gets its own height and keeps its
+   dates in view */
+.scroll.tall{max-height:72vh;overflow-y:auto}
 table{border-collapse:separate;border-spacing:0;width:100%;font-size:13px}
 th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--line-soft);white-space:nowrap}
 thead th{position:sticky;top:0;z-index:5;background:var(--surface-2);font:600 10.5px/1.4 var(--sans);
@@ -220,6 +224,38 @@ tbody tr:last-child td{border-bottom:0}
   background:var(--sunk);color:var(--faint);flex:none}
 .fg .lbl .tag.d{background:var(--accent-soft);color:var(--accent-ink)}
 .fg .lbl .tag.c{background:var(--ok-soft);color:var(--ok)}
+/* ---- production timeline ---- */
+/* fixed layout: a week is a week wide, whatever the label inside it says */
+.tl{font-size:12.5px;table-layout:fixed;width:auto}
+.tl th,.tl td{padding:3px 4px;border-bottom:1px solid var(--line-soft);border-right:1px solid var(--line-soft)}
+.tl thead th{background:var(--surface-2);position:sticky;top:0;z-index:6}
+.tl .stick{position:sticky;left:0;z-index:4;background:var(--surface);width:230px}
+.tl thead .stick{z-index:8;background:var(--surface-2)}
+.tl tbody tr:hover .stick{background:var(--surface-2)}
+.tl th.wkh{text-align:center;font:600 10px/1.3 var(--mono);color:var(--muted);width:46px}
+.tl th.wkh b{display:block;font-weight:600;color:var(--ink-2);font-size:11px}
+.tl th.wkh.now{color:var(--accent-ink);background:var(--accent-soft)}
+.tl tr.sep td{background:var(--sunk);height:5px;padding:0}
+.tl tr.cap td.v{text-align:center;vertical-align:bottom;height:42px;position:relative}
+.tl tr.cap td.neg{background:var(--crit-soft)}
+.tl .capbar{height:26px;display:flex;align-items:flex-end;justify-content:center}
+.tl .capbar i{display:block;width:14px;border-radius:3px 3px 0 0;background:var(--accent);opacity:.75}
+.tl .capbar.over i{background:var(--crit);opacity:.9}
+.tl .capnum{display:block;font:600 9px/1.2 var(--mono);color:var(--muted)}
+.tl .lbl{display:flex;align-items:center;gap:6px}
+.tl .lbl .tag{font:600 9px/1 var(--sans);letter-spacing:.06em;text-transform:uppercase;
+  padding:3px 4px;border-radius:3px;background:var(--sunk);color:var(--muted)}
+.tl .lbl .tag.b{background:var(--accent-soft);color:var(--accent-ink)}
+.tl .lbl .tag.p{background:var(--ok-soft);color:var(--ok)}
+.tl td.barcell{padding:3px 2px}
+.tl .runbar{border-radius:4px;padding:2px 6px;font:600 10px/1.5 var(--mono);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tl .runbar.ok{background:var(--ok-soft);color:var(--ok)}
+.tl .runbar.plan{background:var(--accent-soft);color:var(--accent-ink)}
+.fg input.growth{width:44px;flex:none;border:1px solid var(--line);border-radius:4px;
+  padding:1px 3px;font:600 10px/1.4 var(--mono);text-align:right;background:var(--surface);
+  color:var(--ink-2)}
+.fg input.growth:focus{outline:1px solid var(--accent);background:var(--accent-soft)}
 .basis{border:0;background:var(--sunk);border-radius:4px;font-size:10.5px;padding:2px 4px;color:var(--muted);
   max-width:124px;cursor:pointer}
 .basis:hover{color:var(--ink)}
@@ -355,7 +391,7 @@ function skus(){const out=[];for(const p of S.products.slice().sort((a,b)=>(a.so
 const activeLocs=()=>S.locations.filter(l=>l.active!==false&&l.type!=="internal").sort((a,b)=>(a.sort|0)-(b.sort|0));
 const planOf=s=>{
   const p=S.plan[s]||(S.plan[s]={id:s});
-  for(const k of ["basis","method","manual","planned","override","targetUnits","targetWeeks","off"])
+  for(const k of ["basis","method","manual","planned","override","targetUnits","targetWeeks","off","growth"])
     if(!p[k]) p[k]={};
   return p;
 };
@@ -869,8 +905,11 @@ function seasonalMean(sku,field,locKey,wk,avgWin){
   return f==null?lvl:lvl*f;
 }
 
-function forecastSeries(sku,field,locKey,weeks,basis,manualMap,avgWin,locId){
+function forecastSeries(sku,field,locKey,weeks,basis,manualMap,avgWin,locId,growth){
   const cw=S.config.currentWeek;
+  /* "same as last year, but up 15%" — the uplift rides on the prior-year basis
+     only, so switching basis never leaves a stray multiplier behind */
+  const g=(basis==="prior_year"&&growth!=null&&growth!==100)?growth/100:1;
   const avg=avgOf(sku,field,locKey,cw,avgWin);
   const ownHistory=tail(sku,field,locKey,cw,avgWin).length>0;
   let lvl0;                               /* worked out once per series */
@@ -897,7 +936,7 @@ function forecastSeries(sku,field,locKey,weeks,basis,manualMap,avgWin,locId){
     if(basis==="model"){ const m=modelAt(sku,field,locId,w); if(m!=null) return m; }
     if(basis==="recent_avg"&&ownHistory){ const s=seasonal(w); return s==null?avg:s; }
     const py=at(sku,field,locKey,wkAdd(w,-52));
-    if(py!=null) return py;
+    if(py!=null) return py*g;
     const m=modelAt(sku,field,locId,w);     /* nothing of our own for this week */
     if(m!=null) return m;
     return avg;
@@ -968,10 +1007,11 @@ function compute(sku){
     const manual=(pl.manual&&pl.manual[l.id])||{};
     const planned=(pl.planned&&pl.planned[l.id])||{};
     const override=(pl.override&&pl.override[l.id])||{};
+    const growth=(pl.growth&&pl.growth[l.id]);
 
     if(!tracks){
-      const ship=forecastSeries(sku,"out",kOut,weeks,basis,manual,cfg.avgWindow,l.id);
-      rows.push({loc:l,tracks:false,basis,method:"direct",ship,draw:null,soh:null,manual,
+      const ship=forecastSeries(sku,"out",kOut,weeks,basis,manual,cfg.avgWindow,l.id,growth);
+      rows.push({loc:l,tracks:false,basis,method:"direct",ship,draw:null,soh:null,manual,growth,
         pastOut:past.map(w=>at(sku,"out",kOut,w)),
         avg:avgOf(sku,"out",kOut,cw,cfg.avgWindow)});
       continue;
@@ -985,7 +1025,7 @@ function compute(sku){
       const msrc=pl.model.loc||l.id;
       if(tail(pl.model.sku,"used",histLoc(pl.model.sku,"used",msrc),cw,12).length) drawField="used";
     }
-    const draw=forecastSeries(sku,drawField,drawKey,weeks,basis,manual,cfg.avgWindow,l.id);
+    const draw=forecastSeries(sku,drawField,drawKey,weeks,basis,manual,cfg.avgWindow,l.id,growth);
     const avgDraw=Math.max(0,avgOf(sku,drawField,drawKey,cw,cfg.avgWindow)||sum(draw)/Math.max(1,draw.length));
     const tW=(pl.targetWeeks&&pl.targetWeeks[l.id])!=null?pl.targetWeeks[l.id]:(l.targetWeeks||3);
     const tU=(pl.targetUnits&&pl.targetUnits[l.id]);
@@ -1014,7 +1054,7 @@ function compute(sku){
       }
       sohArr.push(soh); shipArr.push(ship);
     }
-    rows.push({loc:l,tracks:true,basis,method,draw,ship:shipArr,soh:sohArr,target,avg:avgDraw,
+    rows.push({loc:l,tracks:true,basis,method,draw,ship:shipArr,soh:sohArr,target,avg:avgDraw,growth,
       planned,override,
       opening:openingSOH(sku,l.id),
       pastOut:past.map(w=>at(sku,"out",kOut,w)),
@@ -1129,9 +1169,79 @@ function drawNav(){
   }
 }
 function alertsSafe(){ try{ return S.ready?alerts():[]; }catch(e){ return []; } }
-function go(v){ S.view=v; render(); window.scrollTo(0,0); }
+/* changing screens starts at the top, so nothing from the last one is put back */
+function go(v){ S.view=v; _fresh=true; _uiSeq++; render(); _fresh=false; window.scrollTo(0,0); }
+
+/* Typing a figure redraws the screen, and a redraw used to throw away where
+   you were — the page jumped back to the top, the sideways scroll went with
+   it and the cell you had just tabbed into lost focus. Every editable cell
+   carries a key, so the page, each scroll box and the caret can all be put
+   back exactly where they were. */
+/* where in the pane something sits, for anything without a key of its own —
+   a dropdown, a button — since the screen is rebuilt the same way each time */
+function uiPath(n){
+  const pane=$("#pane"), p=[];
+  while(n&&n!==pane&&n.parentNode){
+    p.push([].indexOf.call(n.parentNode.children,n));
+    n=n.parentNode;
+  }
+  return n===pane?p.reverse():null;
+}
+function uiAt(p){
+  let n=$("#pane");
+  for(const i of p){ n=n&&n.children[i]; if(!n) return null; }
+  return n;
+}
+let _fresh=false, _uiSeq=0;
+function uiState(){
+  if(_fresh) return null;
+  const a=document.activeElement, inPane=a&&$("#pane")&&$("#pane").contains(a);
+  const st={y:window.scrollY,
+            k:inPane&&a.getAttribute?a.getAttribute("data-k"):null,
+            path:null,sel:null,box:[]};
+  if(inPane&&a!==document.body){
+    st.path=uiPath(a);
+    if(a.selectionStart!=null) st.sel=[a.selectionStart,a.selectionEnd];
+  }
+  for(const d of document.querySelectorAll("#pane .scroll")) st.box.push([d.scrollLeft,d.scrollTop]);
+  return st;
+}
+function uiRestore(st){
+  if(!st) return;
+  /* the boxes are put back twice: once now, and once the browser has settled
+     the table's width, which it may not have done at the first attempt */
+  const seq=++_uiSeq;
+  const boxes=()=>document.querySelectorAll("#pane .scroll");
+  const scrolls=()=>{
+    const bs=boxes();
+    for(let i=0;i<bs.length;i++){
+      const p=st.box[i]; if(!p) continue;
+      if(p[0]&&bs[i].scrollLeft!==p[0]) bs[i].scrollLeft=p[0];
+      if(p[1]&&bs[i].scrollTop!==p[1]) bs[i].scrollTop=p[1];
+    }
+  };
+  scrolls();
+  let n=null;
+  if(st.k) n=$('#pane [data-k="'+st.k.replace(/"/g,"")+'"]');
+  if(!n&&st.path) n=uiAt(st.path);
+  if(n&&n.focus&&n!==document.activeElement){
+    try{ n.focus({preventScroll:true}); }catch(e){ n.focus(); }
+  }
+  if(n&&st.sel&&n.setSelectionRange){ try{ n.setSelectionRange(st.sel[0],st.sel[1]); }catch(e){} }
+  window.scrollTo(0,st.y);
+  requestAnimationFrame(()=>{ if(seq!==_uiSeq) return; scrolls(); window.scrollTo(0,st.y); });
+}
+/* A cell's change event fires while the focus is still moving to the next one,
+   so the redraw waits a tick — by then the new cell is focused and can be
+   found again after the rebuild. */
+let _pending=0;
+function reflow(){
+  if(_pending) return;
+  _pending=setTimeout(()=>{_pending=0;render();},0);
+}
 
 function render(){
+  const ui=uiState();
   const v=VIEWS.find(x=>x.id===S.view)||VIEWS[0];
   $("#ttl").textContent=v.title;
   $("#sub").textContent=v.sub;
@@ -1155,6 +1265,7 @@ function render(){
     pane.append(el("div",{class:"card"},el("div",{class:"empty"},
       el("b",{},"Something went wrong drawing this screen"),String(e&&e.message||e))));
   }
+  uiRestore(ui);
 }
 
 function seedBanner(){
@@ -1262,6 +1373,15 @@ function skuGrid(s,c){
     el("button",{class:"btn sm",title:"Choose which distributors and channels this SKU goes to",
       onclick:ev=>{ev.stopPropagation();editChannels(s);}},
       c.rows.length+" channel"+(c.rows.length===1?"":"s")),
+    (()=>{const n=c.rows.filter(r=>r.basis==="prior_year").length;
+      if(!n) return null;
+      const g=planOf(s.id).growth||{};
+      const set=c.rows.filter(r=>r.basis==="prior_year"&&g[r.loc.id]!=null&&g[r.loc.id]!==100);
+      return el("button",{class:"btn sm",style:"margin-left:6px",
+        title:"Forecast last year up or down by a percentage",
+        onclick:ev=>{ev.stopPropagation();editGrowth(s);}},
+        set.length?("vs last yr "+(set.length===1?n0(set[0].growth)+"%"
+          :set.length+" set")):"vs last yr");})(),
     (()=>{if(!typedEntries(s.id,null).length) return null;
       const n=typedCount(s.id);
       return el("button",{class:"btn sm",style:"margin-left:6px",
@@ -1309,9 +1429,12 @@ function skuGrid(s,c){
     const labrow=el("div",{class:"lbl"},
       el("span",{class:"tag "+tagcls},tag),
       el("span",{style:"overflow:hidden;text-overflow:ellipsis;flex:1"},r.loc.name));
-    if(!r.tracks) labrow.append(sel(Object.entries(BASES).filter(([k])=>k!=="planned"),r.basis,
-      {class:"basis",title:"How this channel's demand is forecast",
-       onchange:e=>setBasis(s.id,r.loc.id,e.target.value)}));
+    if(!r.tracks){
+      labrow.append(sel(Object.entries(BASES).filter(([k])=>k!=="planned"),r.basis,
+        {class:"basis",title:"How this channel's demand is forecast",
+         onchange:e=>setBasis(s.id,r.loc.id,e.target.value)}));
+      labrow.append(growthBox(s.id,r));
+    }
     lab.append(labrow);
     lab.title=r.loc.name+" — "+LOCTYPE[r.loc.type];
     tr1.append(lab);
@@ -1327,7 +1450,8 @@ function skuGrid(s,c){
       const l2=el("td",{class:"stick"});
       const bs=sel(Object.entries(BASES).filter(([k])=>k!=="planned"),r.basis,
         {class:"basis",onchange:e=>setBasis(s.id,r.loc.id,e.target.value)});
-      l2.append(el("div",{class:"lbl"},el("span",{style:"padding-left:22px;color:var(--muted)"},"Their drawdown"),bs));
+      l2.append(el("div",{class:"lbl"},el("span",{style:"padding-left:22px;color:var(--muted)"},"Their drawdown"),
+        bs,growthBox(s.id,r)));
       tr2.append(l2);
       (r.pastDraw||[]).forEach((v,i)=>tr2.append(vcell(v,i)));
       r.draw.forEach((v,i)=>tr2.append(drawCell(s.id,r,c.weeks[i],v)));
@@ -1409,6 +1533,62 @@ function skuGrid(s,c){
   }
   return wrap;
 }
+/* "same as last year, but…" — a percentage against the prior-year basis.
+   100 is no change, 150 is half as much again, 50 is half. It only shows on a
+   channel actually forecasting off last year, since that is the only thing it
+   multiplies. */
+function growthBox(sku,r){
+  if(r.basis!=="prior_year") return null;
+  const cur=(planOf(sku).growth||{})[r.loc.id];
+  return el("input",{class:"growth",type:"text",inputmode:"numeric",
+    "data-k":"growth|"+sku+"|"+r.loc.id,
+    value:cur!=null&&cur!==100?n0(cur):"",placeholder:"100",
+    title:"Percent of last year for "+r.loc.name+" — 150 forecasts half as much again, 50 forecasts half",
+    onchange:e=>setGrowth(sku,r.loc.id,e.target.value)});
+}
+function setGrowth(sku,loc,val){
+  const pl=planOf(sku); pl.growth=pl.growth||{};
+  const v=num(val);
+  if(v==null||v===100) delete pl.growth[loc]; else pl.growth[loc]=v;
+  persist("plan",pl); reflow();
+}
+/* set it across every channel on prior year in one go */
+function editGrowth(s){
+  const c=compute(s.id);
+  const rows=c.rows.filter(r=>r.basis==="prior_year");
+  openDialog("Growth against last year — "+s.product.name+" "+s.pack,b=>{
+    b.append(el("div",{class:"note"},el("b",{},"100 leaves last year as it was. "),
+      "150 forecasts half as much again, 50 forecasts half. It applies to the channels "+
+      "forecasting off last year — "+(rows.length||"none")+" of them here — and to nothing else."));
+    const all=el("input",{type:"text",inputmode:"numeric",placeholder:"e.g. 110",style:"max-width:120px"});
+    b.append(el("div",{class:"row",style:"gap:8px;align-items:flex-end"},
+      field("Set every channel to",all),
+      el("button",{class:"btn",type:"button",onclick:()=>{
+        const v=num(all.value);
+        for(const inp of b.querySelectorAll("input[data-loc]")) inp.value=v==null?"":n0(v);
+      }},"Apply to all")));
+    if(!rows.length) b.append(el("div",{class:"empty"},
+      "No channel on this SKU is forecasting off last year. Switch one to prior year first."));
+    const list=el("div",{style:"max-height:40vh;overflow:auto"});
+    for(const r of rows){
+      const cur=(planOf(s.id).growth||{})[r.loc.id];
+      list.append(el("label",{class:"row",style:"gap:10px;align-items:center;padding:4px 2px"},
+        el("span",{style:"flex:1"},r.loc.name,el("span",{class:"dim"},"  ·  "+LOCTYPE[r.loc.type])),
+        el("input",{type:"text",inputmode:"numeric","data-loc":r.loc.id,style:"max-width:84px",
+          value:cur!=null&&cur!==100?n0(cur):"",placeholder:"100"}),
+        el("span",{class:"hint"},"% of last year")));
+    }
+    b.append(list);
+  },body=>{
+    const pl=planOf(s.id); pl.growth=pl.growth||{};
+    for(const inp of body.querySelectorAll("input[data-loc]")){
+      const v=num(inp.value);
+      if(v==null||v===100) delete pl.growth[inp.getAttribute("data-loc")];
+      else pl.growth[inp.getAttribute("data-loc")]=v;
+    }
+    persist("plan",pl); S.calcCache=null;
+  },"Save");
+}
 /* Their drawdown can be typed as well as forecast — it writes the same map the
    direct channels use. A figure typed here switches the channel to manual
    entry, unless it is already on a flat number, where one figure is meant to
@@ -1419,6 +1599,7 @@ function drawCell(sku,r,wk,computed){
   const set=cur!=null&&(r.basis==="manual"||r.basis==="flat");
   const td=el("td",{class:"v inp"+(set?" edited":"")});
   td.append(el("input",{type:"text",inputmode:"numeric",value:set?n0(cur):"",
+    "data-k":"draw|"+sku+"|"+r.loc.id+"|"+wk,
     placeholder:n0(computed)||"0",
     title:"What we expect "+r.loc.name+" to draw down. "+(BASIS_HINT[r.basis]||""),
     onchange:e=>setDraw(sku,r,wk,e.target.value)}));
@@ -1430,7 +1611,7 @@ function setDraw(sku,r,wk,val){
   const v=num(val);
   if(v==null) delete pl.manual[r.loc.id][wk]; else pl.manual[r.loc.id][wk]=v;
   if(r.basis!=="flat"&&r.basis!=="manual") pl.basis[r.loc.id]="manual";
-  persist("plan",pl); render();
+  persist("plan",pl); reflow();
 }
 /* The chains report their own stock rather than being counted, so their
    stock-on-hand cell takes a typed figure in the two live columns. What shows
@@ -1442,10 +1623,11 @@ function sohNowCell(sku,r,wk,isNow){
   const td=el("td",{class:"v inp"+(isNow?" now":"")+(stored!=null?" edited":"")});
   td.append(el("input",{type:"text",inputmode:"numeric",
     value:stored!=null?n0(stored):"",
+    "data-k":"soh|"+sku+"|"+r.loc.id+"|"+wk,
     placeholder:est==null?"—":n0(est),
     title:stored!=null?("What "+r.loc.name+" reported holding this week")
       :("Carried forward — type what "+r.loc.name+" reports and this week's drawdown becomes exact"),
-    onchange:e=>{setTheirSOH(sku,r.loc.id,wk,e.target.value);render();}}));
+    onchange:e=>{setTheirSOH(sku,r.loc.id,wk,e.target.value);reflow();}}));
   return td;
 }
 /* Two columns are live. Monday morning last week's is tidied up with what
@@ -1455,10 +1637,11 @@ function sohNowCell(sku,r,wk,isNow){
 function nowCell(sku,r,wk,v,isNow){
   const td=el("td",{class:"v inp"+(isNow?" now":"")+(v!=null?" edited":"")});
   td.append(el("input",{type:"text",inputmode:"numeric",value:v==null?"":n0(v),
+    "data-k":"out|"+sku+"|"+r.loc.id+"|"+wk,
     placeholder:"—",
     title:isNow?("Going out to "+r.loc.name+" this week. Saved as the week's actual.")
                :("What actually went to "+r.loc.name+" last week"),
-    onchange:e=>{setActual(sku,r.loc.id,wk,e.target.value);render();}}));
+    onchange:e=>{setActual(sku,r.loc.id,wk,e.target.value);reflow();}}));
   return td;
 }
 /* Every shipping figure can be typed over. Where it lands depends on how the
@@ -1473,6 +1656,7 @@ function shipCell(sku,r,wk,computed){
   const set=cur!=null;
   const td=el("td",{class:"v inp"+(set?" edited":"")});
   const inp=el("input",{type:"text",inputmode:"numeric",value:set?n0(cur):"",
+    "data-k":"ship|"+sku+"|"+r.loc.id+"|"+wk,
     placeholder:n0(computed)||"0",
     title:r.method==="target_soh"
       ?(set?"Known order — clear this to go back to topping up to target"
@@ -1490,11 +1674,11 @@ function setShip(sku,r,wk,val){
   /* typed figures win — but a flat channel is meant to carry one figure forward,
      so typing into it must not quietly drop it back to manual entry */
   if(field==="manual"&&pl.basis[r.loc.id]!=="flat") pl.basis[r.loc.id]="manual";
-  persist("plan",pl); render();
+  persist("plan",pl); reflow();
 }
 function setPlanned(sku,loc,wk,val){const pl=planOf(sku);pl.planned[loc]=pl.planned[loc]||{};
   const v=num(val); if(v==null) delete pl.planned[loc][wk]; else pl.planned[loc][wk]=v;
-  persist("plan",pl);render();}
+  persist("plan",pl);reflow();}
 function setBasis(sku,loc,v){const pl=planOf(sku);pl.basis[loc]=v;persist("plan",pl);render();}
 function setMethod(sku,loc,v){const pl=planOf(sku);pl.method[loc]=v;persist("plan",pl);render();}
 /* ---- clearing typed figures in bulk ----
@@ -1853,6 +2037,113 @@ function syncPacks(b,keep,prodId,packId){
 }
 
 /* ============================ 3. PRODUCTION ============================ */
+/* ---- the production timeline ----
+   Weeks across the top; above the line what goes into tank and what comes out
+   of the packaging hall each week against capacity, below it every run drawn
+   from its brew week to its pack week, so a crowded fortnight is visible as a
+   stack of bars rather than a list of dates. */
+let prodWeeks = 26;
+function brewWeek(r){ return monday(r.brewDate||r.packDate); }
+function packWeek(r){ return monday(r.packDate); }
+function capacityRows(weeks){
+  const brew={}, pack={};
+  for(const w of weeks){ brew[w]=0; pack[w]=0; }
+  for(const r of S.runs){
+    if(r.status==="cancelled") continue;
+    const L=litres(r);
+    const b=brewWeek(r), p=packWeek(r);
+    if(b in brew) brew[b]+=L;
+    if(p in pack) pack[p]+=L;
+  }
+  return {brew,pack};
+}
+function productionTimeline(pane){
+  const start=S.config.currentWeek;
+  const weeks=[]; for(let i=0;i<prodWeeks;i++) weeks.push(wkAdd(start,i));
+  const last=weeks[weeks.length-1];
+  const {brew,pack}=capacityRows(weeks);
+  const bc=num(S.config.brewCap)||0, pc=num(S.config.packCap)||0;
+  const over=weeks.filter(w=>(bc&&brew[w]>bc)||(pc&&pack[w]>pc));
+
+  const card=el("div",{class:"card"});
+  card.append(el("header",{},el("h3",{},"Timeline"),
+    el("span",{class:"hint"},"brew week to pack week, "+prodWeeks+" weeks from "+fmtD(start)),
+    el("span",{style:"flex:1"}),
+    sel([[13,"13 weeks"],[26,"26 weeks"],[52,"52 weeks"]],prodWeeks,
+      {onchange:e=>{prodWeeks=+e.target.value;render();}})));
+  /* fixed layout only settles the columns if the table itself has a width */
+  const scroll=el("div",{class:"scroll tall"});
+  const tb=el("table",{class:"tl",style:"width:"+(230+weeks.length*46)+"px"});
+  const hr=el("tr",{},el("th",{class:"stick"},"Week commencing"));
+  weeks.forEach((w,i)=>{
+    const yr=String(D(w).getUTCFullYear()).slice(2);
+    const showYr=i===0||D(w).getUTCMonth()===0&&D(wkAdd(w,-1)).getUTCMonth()===11;
+    const th=el("th",{class:"wkh"+(i===0?" now":"")},el("b",{},fmtW(w)),showYr?yr:"");
+    th.title=w; hr.append(th);
+  });
+  tb.append(el("thead",{},hr));
+  const body=el("tbody");
+
+  const capRow=(label,map,cap,cls)=>{
+    const tr=el("tr",{class:"cap"});
+    tr.append(el("td",{class:"stick"},el("div",{class:"lbl"},
+      el("span",{class:"tag "+cls},cls==="b"?"brew":"pack"),label,
+      cap?el("span",{class:"hint"},"  cap "+n0(cap)+" L"):null)));
+    for(const w of weeks){
+      const v=map[w]||0;
+      const pct=cap?Math.min(100,v/cap*100):0;
+      const td=el("td",{class:"v"+(cap&&v>cap?" neg":"")});
+      td.title=fmtW(w)+" — "+n0(v)+" L"+(cap?" of "+n0(cap)+" L ("+Math.round(v/cap*100)+"%)":"");
+      if(v>0){
+        if(cap) td.append(el("div",{class:"capbar"+(v>cap?" over":"")},
+          el("i",{style:"height:"+Math.max(8,pct)+"%"})));
+        td.append(el("span",{class:"capnum"},n0(Math.round(v/100)/10)+"k"));
+      } else td.append(el("span",{class:"capnum dim"},"·"));
+      tr.append(td);
+    }
+    return tr;
+  };
+  body.append(capRow("Into tank",brew,bc,"b"));
+  body.append(capRow("Packaged",pack,pc,"p"));
+  body.append(el("tr",{class:"sep"},el("td",{colspan:weeks.length+1})));
+
+  const runs=S.runs.filter(r=>r.status!=="cancelled"&&packWeek(r)>=start&&brewWeek(r)<=last)
+    .sort((a,b)=>brewWeek(a)<brewWeek(b)?-1:brewWeek(a)>brewWeek(b)?1:(a.packDate<b.packDate?-1:1));
+  if(!runs.length){
+    body.append(el("tr",{},el("td",{colspan:weeks.length+1},
+      el("div",{class:"empty"},"Nothing scheduled in this window."))));
+  }
+  for(const r of runs){
+    const bI=Math.max(0,weeks.indexOf(brewWeek(r))), pI=weeks.indexOf(packWeek(r));
+    const from=brewWeek(r)<start?0:bI, to=pI<0?weeks.length-1:pI;
+    const tr=el("tr",{});
+    const p=P(r.productId)||{name:r.productId};
+    tr.append(el("td",{class:"stick"},el("div",{class:"lbl"},
+      el("span",{style:"overflow:hidden;text-overflow:ellipsis;flex:1"},p.name+" "+r.pack),
+      el("span",{class:"hint"},n0(r.units)),
+      el("button",{class:"btn sm",title:"Edit this run",
+        onclick:()=>newRun(null,null,null,r)},"Edit"))));
+    if(from>0) tr.append(el("td",{colspan:from}));
+    const span=Math.max(1,to-from+1);
+    const bar=el("td",{colspan:span,class:"barcell"});
+    const L=litres(r);
+    const short=(L>=1000?(Math.round(L/100)/10)+"k":n0(L))+" L";
+    bar.append(el("div",{class:"runbar "+(r.status==="confirmed"?"ok":"plan")},
+      el("span",{},span>=4?(fmtD(r.brewDate||r.packDate)+" → "+fmtD(r.packDate)+"  ·  "+short):short)));
+    bar.title=p.name+" "+r.pack+" — brew "+fmtD(r.brewDate||"?")+", pack "+fmtD(r.packDate)+
+      ", "+n0(r.units)+" units ("+n0(litres(r))+" L)";
+    tr.append(bar);
+    if(to<weeks.length-1) tr.append(el("td",{colspan:weeks.length-1-to}));
+    body.append(tr);
+  }
+  tb.append(body); scroll.append(tb); card.append(scroll);
+  if(over.length) card.append(el("div",{class:"note",style:"margin:0;border:0;border-top:1px solid var(--line-soft);border-radius:0"},
+    el("b",{},over.length+" week"+(over.length===1?"":"s")+" over capacity: "),
+    over.slice(0,6).map(w=>fmtD(w)).join(", ")+(over.length>6?" and more":"")+
+    ". Move a run's brew or pack date to spread the load."));
+  pane.append(card);
+  return {weeks,brew,pack,over};
+}
 function viewProduction(pane,ctl){
   ctl.append(el("button",{class:"btn pri",onclick:()=>newRun()},"Schedule run"));
   const all=computeAll(), a=alertsSafe();
@@ -1865,7 +2156,13 @@ function viewProduction(pane,ctl){
     a.filter(x=>x.sev==="crit").length?"alert":"warn"));
   const nb=a.filter(x=>x.brewBy).sort((x,y)=>x.brewBy<y.brewBy?-1:1)[0];
   t.append(tile("Earliest brew-by",nb?fmtD(nb.brewBy):"—",nb?nb.name:"All covered"));
+  const wk=[]; for(let i=0;i<prodWeeks;i++) wk.push(wkAdd(S.config.currentWeek,i));
+  const cr=capacityRows(wk), bc=num(S.config.brewCap)||0, pc=num(S.config.packCap)||0;
+  const overW=wk.filter(w=>(bc&&cr.brew[w]>bc)||(pc&&cr.pack[w]>pc));
+  if(bc||pc) t.append(tile("Weeks over capacity",String(overW.length),
+    overW.length?"first "+fmtD(overW[0]):"inside capacity",overW.length?"alert":"good"));
   pane.append(t);
+  productionTimeline(pane);
 
   if(a.filter(x=>x.sev!=="ok").length){
     const c=el("div",{class:"card"});
@@ -1930,9 +2227,13 @@ function newRun(sku,packDate,units,existing){
       field("Product",sel(S.products.map(p=>[p.id,p.name]),r.productId,{id:"rp",onchange:()=>{syncPacks(b,null,"rp","rk");syncBrew(b);}})),
       field("Pack",sel(PACKS.map(p=>[p,p]),r.pack,{id:"rk",onchange:()=>syncBrew(b)}))));
     b.append(el("div",{class:"grid3"},
+      field("Brew date",el("input",{type:"date",id:"rb",value:r.brewDate||"",
+        onchange:()=>syncBrew(b,true)}),"When it goes into the tank"),
       field("Pack date",el("input",{type:"date",id:"rd",value:r.packDate,onchange:()=>syncBrew(b)})),
-      field("Units",el("input",{type:"number",id:"ru",value:r.units,placeholder:"576"})),
-      field("Status",sel([["planned","Planned"],["confirmed","Confirmed"],["cancelled","Cancelled"]],r.status,{id:"rs"}))));
+      field("Units",el("input",{type:"number",id:"ru",value:r.units,placeholder:"576"}))));
+    b.append(el("div",{class:"grid2"},
+      field("Status",sel([["planned","Planned"],["confirmed","Confirmed"],["cancelled","Cancelled"]],r.status,{id:"rs"})),
+      el("div",{})));
     b.append(el("div",{class:"note",id:"rbrew"},"—"));
     b.append(field("Note",el("input",{type:"text",id:"rn",value:r.note||"",placeholder:"Tank 4, double batch"})));
     if(existing) b.append(el("button",{class:"btn danger",type:"button",style:"align-self:flex-start",
@@ -1943,20 +2244,29 @@ function newRun(sku,packDate,units,existing){
       units:num($("#ru",body).value)||0,status:$("#rs",body).value,note:$("#rn",body).value.trim()};
     if(!rec.packDate||!rec.units){flash("A run needs a pack date and a quantity");return false;}
     const p=P(rec.productId)||{};
-    rec.brewDate=iso(new Date(D(rec.packDate)-(p.brewToPackDays||21)*DAY));
+    /* a brew date typed in stands; left alone it follows the product's lead time */
+    rec.brewDate=$("#rb",body).value
+      ||iso(new Date(D(rec.packDate)-(p.brewToPackDays||21)*DAY));
     const i=S.runs.findIndex(x=>x.id===rec.id);
     if(i>=0) S.runs[i]=rec; else S.runs.push(rec);
     persist("runs",rec); flash("Run saved — the coldroom forecast has moved");
   },existing?"Save":"Schedule");
 }
-function syncBrew(b){
-  const p=P($("#rp",b).value)||{brewToPackDays:21}, d=$("#rd",b).value;
+function syncBrew(b,fromBrew){
+  const p=P($("#rp",b).value)||{brewToPackDays:21};
+  const d=$("#rd",b).value, bd=$("#rb",b);
   const n=$("#rbrew",b); clear(n);
   if(!d){n.textContent="Pick a pack date to see the brew date.";return;}
-  const brew=iso(new Date(D(d)-(p.brewToPackDays||21)*DAY));
-  n.append(el("b",{},"Brew by "+fmtD(brew)+". "),
-    (p.brewToPackDays||21)+" days from brew to pack for "+(p.name||"this product")+
-    ", so it lands in the coldroom in the week commencing "+fmtW(monday(d))+".");
+  const lead=p.brewToPackDays||21;
+  const implied=iso(new Date(D(d)-lead*DAY));
+  /* changing the pack date re-dates the brew unless the brew date is what moved */
+  if(bd&&!fromBrew) bd.value=implied;
+  const actual=(bd&&bd.value)||implied;
+  const days=Math.round(dDiff(actual,d));
+  n.append(el("b",{},"Brew "+fmtD(actual)+", pack "+fmtD(d)+" — "+days+" days in tank. "),
+    (days===lead?"That's the ":"The ")+(p.name||"product")+" default of "+lead+" days"+
+    (days===lead?". ":", so this one is "+Math.abs(days-lead)+" days "+(days>lead?"longer":"shorter")+". ")+
+    "It lands in the coldroom in the week commencing "+fmtW(monday(d))+".");
 }
 function editRunsForWeek(sku,week){
   const s=skus().find(x=>x.id===sku);
@@ -2617,6 +2927,14 @@ function viewSetup(pane,ctl){
     field("Default demand basis",sel([["prior_year","Prior year"],["recent_avg","Recent average"],["manual","Manual entry"]],
       S.config.defaultDrawBasis,{onchange:e=>{S.config.defaultDrawBasis=e.target.value;S.calcCache=null;saveConfig();render();}}),
       "Override per distributor in the forecast grid"),
+    field("Brewing capacity",el("input",{type:"number",min:"0",step:"1000",
+      value:S.config.brewCap!=null?S.config.brewCap:"",placeholder:"litres a week",
+      onchange:e=>{S.config.brewCap=num(e.target.value);S.calcCache=null;saveConfig();render();}}),
+      "Litres into tank a week — blank for no target"),
+    field("Packaging capacity",el("input",{type:"number",min:"0",step:"1000",
+      value:S.config.packCap!=null?S.config.packCap:"",placeholder:"litres a week",
+      onchange:e=>{S.config.packCap=num(e.target.value);S.calcCache=null;saveConfig();render();}}),
+      "Litres packaged a week — blank for no target"),
     field("Recent average window",el("input",{type:"number",min:"2",max:"52",value:S.config.avgWindow,
       onchange:e=>{S.config.avgWindow=Math.max(2,num(e.target.value)||8);S.calcCache=null;saveConfig();render();}}),
       "Weeks of history to average")));

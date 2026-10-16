@@ -161,6 +161,13 @@ Taken from the conventions in the original sheet:
   week and they sit about one week's drawdown under the target, since the
   shipment lands a week after the shortfall is measured — set the target to
   include that week.
+- **Growth against last year.** A channel forecasting off prior year can carry a
+  percentage: 150 forecasts half as much again, 50 forecasts half, 100 leaves it
+  alone. The box sits beside that channel's basis picker, and the **vs last yr**
+  button in the SKU header sets it across every prior-year channel at once. It
+  rides on the prior-year basis only, so switching a channel to recent average
+  never leaves a stray multiplier behind.
+
 - Either way, **any shipping figure can be typed over**: on a top-up location a
   typed figure is a known order and is used instead of the calculated one for
   that week, and clearing the cell hands it back to the calculation. Typed
@@ -184,6 +191,27 @@ Taken from the conventions in the original sheet:
 - **Send by** is best before minus half the product's shelf life — the last date
   a batch can go to a distributor with half its life left. Shelf life is per
   product per pack in Setup, defaulting to 12 months for cans and 6 for kegs.
+
+## Production
+
+The **Timeline** puts the weeks across the top. Above the line, what goes into
+tank and what comes out of the packaging hall each week in litres, against the
+capacities set in Setup — a week over its capacity goes red, and a tile counts
+how many are. Below the line, every run is drawn as a bar from its brew week to
+its pack week, so a crowded fortnight reads as a stack of bars rather than a
+list of dates. The window switches between 13, 26 and 52 weeks, and any bar can
+be opened for editing.
+
+Each run carries its **own brew date**. It defaults to the product's brew-to-pack
+time (Setup, 21 days unless changed) and every run already in the system has one
+on that basis, but it can be typed over for a beer that needs longer in tank —
+the dialog says how many days in tank the dates imply and how that compares with
+the default. Moving the pack date re-dates the brew unless the brew date is what
+you moved.
+
+Capacity is in **litres a week** for both, set under *Setup → Forecast settings*.
+Leave either blank for no target. Litres come from the pack size: a carton is 9 L,
+a 10-pack 3.75 L, a keg 50 L and a 30 L keg 30 L.
 
 ## Review
 
