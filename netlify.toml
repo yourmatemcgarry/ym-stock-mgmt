@@ -18,3 +18,15 @@
   for = "/seed.json"
   [headers.values]
     Cache-Control = "no-store"
+
+# The whole app is one HTML file, so a cached copy of it is a cached copy of
+# the whole site. Never let a browser hold onto it: every visit checks.
+[[headers]]
+  for = "/"
+  [headers.values]
+    Cache-Control = "no-store, must-revalidate"
+
+[[headers]]
+  for = "/index.html"
+  [headers.values]
+    Cache-Control = "no-store, must-revalidate"

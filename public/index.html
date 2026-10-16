@@ -77,6 +77,7 @@ button,input,select,textarea{font:inherit;color:inherit}
 .sync i{width:6px;height:6px;border-radius:50%;background:var(--faint);flex:none}
 .sync.on i{background:var(--ok)}
 .sync.off i{background:var(--warn)}
+.bld{font:500 10.5px/1.4 var(--mono);color:var(--faint);letter-spacing:.02em}
 
 .main{min-width:0;display:flex;flex-direction:column}
 .top{position:sticky;top:0;z-index:30;background:var(--surface);border-bottom:1px solid var(--line);
@@ -196,7 +197,7 @@ tbody tr:last-child td{border-bottom:0}
 .gridwrap[data-open="true"] .caret{transform:rotate(90deg)}
 .fg{font-size:12.5px}
 .fg th,.fg td{padding:5px 8px;border-bottom:1px solid var(--line-soft);border-right:1px solid var(--line-soft)}
-.fg thead th{background:var(--surface-2);z-index:6}
+.fg thead th{background:var(--surface-2);position:sticky;top:0;z-index:6}
 .fg .stick{position:sticky;left:0;z-index:4;background:var(--surface);min-width:246px;max-width:246px;
   border-right:1px solid var(--line);overflow:hidden;text-overflow:ellipsis}
 .fg thead .stick{z-index:8;background:var(--surface-2)}
@@ -312,6 +313,7 @@ dialog footer{padding:12px 16px;border-top:1px solid var(--line-soft);display:fl
     <div class="railfoot">
       <div class="wk">Week commencing<b id="curWeek">—</b></div>
       <div class="sync" id="sync"><i></i><span>Connecting…</span></div>
+      <div class="bld" id="bld" title="Which build of the site this is. If it doesn't change after a deploy, the deploy didn't land."></div>
     </div>
   </aside>
   <div class="main">
@@ -329,6 +331,10 @@ dialog footer{padding:12px 16px;border-top:1px solid var(--line-soft);display:fl
 <dialog id="dlg"><form method="dialog" id="dlgform"></form></dialog>
 <script>
 "use strict";
+/* Which build this is. It shows at the bottom of the sidebar and on Setup, so
+   there is never any doubt about whether a deploy actually landed: if the
+   stamp hasn't changed after deploying, the browser is still on the old file. */
+const BUILD="2026-10-16b · pinned dates on the forecast and the timeline";
 /* ============================ helpers ============================ */
 const $ = (s,r)=> (r||document).querySelector(s);
 const el = (t,a,...k)=>{const n=document.createElement(t);
@@ -445,6 +451,7 @@ async function loadAll(){
 }
 
 async function boot(){
+  const bl=$("#bld"); if(bl) bl.textContent="build "+BUILD.split(" · ")[0];
   localLoad();
   let b=null;
   try{ b=await openBackend(); }catch(e){}
@@ -1407,7 +1414,10 @@ function skuGrid(s,c){
     return wrap;
   }
   const axis=[...c.past,...c.weeks], cwIdx=c.past.length-1;
-  const scroll=el("div",{class:"scroll"}), t=el("table",{class:"fg"});
+  /* "tall" bounds the height so the week row has something to stick to: a
+     short SKU is unaffected, a long one scrolls inside its own card with its
+     dates and channel names staying put */
+  const scroll=el("div",{class:"scroll tall"}), t=el("table",{class:"fg"});
   const thead=el("thead"), hr=el("tr",{});
   hr.append(el("th",{class:"stick"},"Week commencing"));
   axis.forEach((w,i)=>{const th=el("th",{class:"wkh"+(i===cwIdx?" now":"")},
@@ -1433,7 +1443,9 @@ function skuGrid(s,c){
       labrow.append(sel(Object.entries(BASES).filter(([k])=>k!=="planned"),r.basis,
         {class:"basis",title:"How this channel's demand is forecast",
          onchange:e=>setBasis(s.id,r.loc.id,e.target.value)}));
-      labrow.append(growthBox(s.id,r));
+      /* only channels forecasting off last year get the percentage box —
+         append() would print a bare "null" for the rest */
+      const gb=growthBox(s.id,r); if(gb) labrow.append(gb);
     }
     lab.append(labrow);
     lab.title=r.loc.name+" — "+LOCTYPE[r.loc.type];
@@ -2887,6 +2899,8 @@ function viewSetup(pane,ctl){
   if(S.backend&&S.backend.kind==="rest"){
     const dc=el("div",{class:"card"});
     dc.append(el("header",{},el("h3",{},"Data in this site"),
+      el("span",{class:"chip",title:"The version of the site itself, as opposed to the data in it"},
+        "site build "+BUILD),
       el("span",{class:"chip "+(S.config.dataStamp?"ok":"warn")},
         S.config.dataStamp?("loaded from the sheet export of "+fmtD(S.config.dataStamp.slice(0,10)))
                           :"vintage unknown")));
