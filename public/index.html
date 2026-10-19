@@ -90,6 +90,11 @@ table.mini th{text-align:left;font:600 10px/1.4 var(--sans);letter-spacing:.06em
 table.mini td{padding:4px 6px;border-bottom:1px solid var(--line-soft)}
 table.mini td.num,table.mini th.num{text-align:right;font-family:var(--mono)}
 .fg td.ret{color:var(--warn);font-weight:600}
+/* a stocktake line that disagrees with the ERP and hasn't been explained */
+input.cellinp.owes{background:var(--warn-soft);box-shadow:inset 0 0 0 1px var(--warn)}
+input.cellinp.owes::placeholder{color:var(--warn);opacity:.9}
+td.cell.mid{text-align:center}
+input.rc{width:15px;height:15px;accent-color:var(--accent);cursor:pointer}
 
 .main{min-width:0;display:flex;flex-direction:column}
 .top{position:sticky;top:0;z-index:30;background:var(--surface);border-bottom:1px solid var(--line);
@@ -346,7 +351,7 @@ dialog footer{padding:12px 16px;border-top:1px solid var(--line-soft);display:fl
 /* Which build this is. It shows at the bottom of the sidebar and on Setup, so
    there is never any doubt about whether a deploy actually landed: if the
    stamp hasn't changed after deploying, the browser is still on the old file. */
-const BUILD="2026-10-19 · returns, packaged actuals, SKU colours, stocktake columns";
+const BUILD="2026-10-19b · plan handover, per-line notes, re-count mode";
 /* ============================ helpers ============================ */
 const $ = (s,r)=> (r||document).querySelector(s);
 const el = (t,a,...k)=>{const n=document.createElement(t);
@@ -1101,6 +1106,17 @@ function compute(sku){
     const target=Math.max(0,(tU!=null&&tU!==""&&num(tU)>0)?num(tU):Math.round(avgDraw*tW));
     const lead=Math.max(0,l.leadTimeWeeks||0);
     const mult=l.orderMultiple||1;
+    /* An order plan only runs as far as the chain has actually told us —
+       their horizon, 13 weeks by default, set per channel in Setup. Figures
+       beyond that are guesswork, so the channel goes back to topping up to
+       target there. A gap inside the plan is still a deliberate zero; a run of
+       zeros on the end is the plan having finished, not an order for none. */
+    let lastPlanned="";
+    for(const w of Object.keys(planned)) if(num(planned[w])>0&&w>lastPlanned) lastPlanned=w;
+    if(method==="planned"){
+      const horizonEnd=wkAdd(cw,Math.max(1,l.plannedHorizon||13));
+      if(!lastPlanned||lastPlanned>horizonEnd) lastPlanned=horizonEnd;
+    }
     /* what we ship in week k lands on their shelf `lead` weeks later */
     let soh=openingSOH(sku,l.id);
     const sohArr=[],shipArr=[];
@@ -1110,7 +1126,8 @@ function compute(sku){
       soh = soh + arriving - draw[k];
       let ship=0;
       const ov=num(override[weeks[k]]);
-      if(method==="planned"){ ship=num(planned[weeks[k]])||0; }
+      const onPlan=method==="planned"&&weeks[k]<=lastPlanned;
+      if(onPlan){ ship=num(planned[weeks[k]])||0; }   /* their order plan stands, zeros included */
       else if(ov!=null){ ship=ov; }          /* we already know what's going */
       else {
         /* Top up to target against what they are holding now: target less their
@@ -1124,7 +1141,7 @@ function compute(sku){
       sohArr.push(soh); shipArr.push(ship);
     }
     rows.push({loc:l,tracks:true,basis,method,draw,ship:shipArr,soh:sohArr,target,avg:avgDraw,growth,
-      planned,override,
+      planned,override,lastPlanned:method==="planned"?(lastPlanned||null):null,
       opening:openingSOH(sku,l.id),
       pastOut:past.map(w=>at(sku,"out",kOut,w)),
       pastRet:past.map(w=>at(sku,"ret",l.id,w)),
@@ -1566,7 +1583,10 @@ function skuGrid(s,c){
       const ms=sel([["target_soh","Top up to target"],["planned","Their order plan"]],r.method,
         {class:"basis",onchange:e=>setMethod(s.id,r.loc.id,e.target.value)});
       l3.append(el("div",{class:"lbl"},el("span",{style:"padding-left:22px"},"Their SOH"),ms,
-        el("span",{class:"hint",title:"Target stock on hand at this distributor"},"tgt "+n0(r.target))));
+        el("span",{class:"hint",title:"Target stock on hand at this distributor"},"tgt "+n0(r.target)),
+        r.lastPlanned?el("span",{class:"hint",style:"color:var(--accent-ink)",
+          title:"Their order plan runs to "+fmtD(r.lastPlanned)+", then this channel tops up to target"},
+          "plan → "+fmtW(r.lastPlanned)):null));
       tr3.append(l3);
       (r.pastSoh||[]).forEach((v,i)=>tr3.append(
         i>=cwIdx-1&&!countedAt(r.loc.id,c.past[i])
@@ -1795,11 +1815,14 @@ function shipCell(sku,r,wk,computed){
   const inp=el("input",{type:"text",inputmode:"numeric",value:set?n0(cur):"",
     "data-k":"ship|"+sku+"|"+r.loc.id+"|"+wk,
     placeholder:n0(computed)||"0",
-    title:r.method==="target_soh"
-      ?(set?"Known order — clear this to go back to topping up to target"
-          :"Topping up to "+n0(r.target)+". Type a figure if you already know what's going.")
-      :r.method==="planned"?"What they've told us they're ordering"
-                           :"What we plan to send. Type a figure to fix it.",
+    title:r.method==="planned"
+      ?(r.lastPlanned&&wk>r.lastPlanned
+          ?"Their order plan ends "+fmtD(r.lastPlanned)+" — topping up to "+n0(r.target)+" from here. Type a figure to extend the plan."
+          :"What they've told us they're ordering")
+      :r.method==="target_soh"
+        ?(set?"Known order — clear this to go back to topping up to target"
+            :"Topping up to "+n0(r.target)+". Type a figure if you already know what's going.")
+        :"What we plan to send. Type a figure to fix it.",
     onchange:e=>setShip(sku,r,wk,e.target.value)});
   td.append(inp); return td;
 }
@@ -1947,6 +1970,12 @@ function viewStocktake(pane,ctl){
     }},"Recalculate from stocktakes"));
   if(st) ctl.append(el("button",{class:"btn",title:"Delete this count and the stock on hand it wrote",
     onclick:()=>deleteStocktake(st)},"Delete"));
+  if(st&&recountCount(st)) ctl.append(el("button",
+    {class:"btn"+(stRecountOnly?" pri":""),
+     title:"Show only the lines that disagree with the ERP or are flagged to count again",
+     onclick:()=>{stRecountOnly=!stRecountOnly;render();}},
+    stRecountOnly?("Showing "+recountCount(st)+" to re-count — show all")
+                 :("Re-count ("+recountCount(st)+")")));
   ctl.append(el("button",{class:"btn pri",onclick:newStocktake},"New stocktake"));
   if(!st){
     pane.append(el("div",{class:"card"},el("div",{class:"empty"},el("b",{},"No stocktakes yet"),
@@ -1959,8 +1988,11 @@ function viewStocktake(pane,ctl){
   const wkTile=tile("Week","w/c "+fmtWY(st.weekStart),"");
   wkTile.lastChild.id="stProgress"; wkTile.lastChild.textContent=stProgressText(st);
   t.append(wkTile);
+  const nDiff=recountCount(st), nWhy=unexplained(st);
+  if(nDiff) t.append(tile("Against the ERP",String(nDiff),
+    nWhy?(nWhy+" still need a reason"):"all explained",nWhy?"warn":"ok"));
   const locOrder=Object.keys(byLoc).sort((a,b)=>((L(a)||{}).sort|0)-((L(b)||{}).sort|0));
-  for(const lid of locOrder.slice(0,5)){
+  for(const lid of locOrder.slice(0,nDiff?4:5)){
     const rows=byLoc[lid],ctns=sum(rows.filter(r=>r.pack==="Can"||r.pack==="10 Pack").map(r=>r.qty)),
       kegs=sum(rows.filter(r=>r.pack==="Keg").map(r=>r.qty)),k30=sum(rows.filter(r=>r.pack==="30L Keg").map(r=>r.qty));
     t.append(tile((L(lid)||{name:lid}).name,n0(ctns)+" ctn",n0(kegs)+" × 50L · "+n0(k30)+" × 30L"));
@@ -2005,10 +2037,12 @@ function viewStocktake(pane,ctl){
       el("th",{class:"num"},"Last week"),
       el("th",{class:"num"},"Count"),
       el("th",{class:"num"},"ERP"),el("th",{class:"num"},"Diff"),
+      el("th",{},"Note"),el("th",{title:"Flag this line to be counted again"},"Re-count"),
       el("th",{},"Best before"),el("th",{},"Send by"),
       el("th",{class:"num"},"Days left"),el("th",{},""))));
     const body=el("tbody");
     for(const e of rows){
+      if(stRecountOnly&&!needsRecount(e)) continue;
       const sm=shelfMonths(e.productId,e.pack);
       const sb=e.bestBefore?iso(new Date(D(e.bestBefore)-Math.round(sm/2*30.44)*DAY)):null;
       const d=sb?dDiff(S.config.currentWeek,sb):null;
@@ -2034,7 +2068,21 @@ function viewStocktake(pane,ctl){
           stSave(st);reflow();}});
       const diff=(e.qty!=null&&e.erp!=null)?Math.round((e.qty-e.erp)*100)/100:null;
       const prev=lastWeekQty(st,e);
-      body.append(el("tr",{class:"stripe "+(d==null?"":d<=0?"crit":d<=28?"warn":""),
+      /* a line that disagrees with the ERP needs a reason before it's settled */
+      const owes=!!diff&&!(e.note||"").trim();
+      const note=el("input",{class:"cellinp"+(owes?" owes":""),type:"text",
+        value:e.note||"",
+        placeholder:owes?"why the difference?":"note",
+        title:owes?"This line disagrees with the ERP — say why before it's signed off"
+                  :"Anything worth remembering about this line",
+        onkeydown:ev=>stepCell(ev),
+        onchange:ev=>{const v=ev.target.value.trim();
+          if(v) e.note=v; else delete e.note; stSave(st); reflow();}});
+      const rc=el("input",{type:"checkbox",class:"rc",checked:!!e.recount,
+        title:"Count this one again",
+        onchange:ev=>{if(ev.target.checked) e.recount=true; else delete e.recount;
+          stSave(st); reflow();}});
+      body.append(el("tr",{class:"stripe "+(e.recount?"warn ":"")+(d==null?"":d<=0?"crit":d<=28?"warn":""),
           "data-zero":String(e.qty==null)},
         el("td",{},swatch(skuId(e.productId,e.pack),e.pack),(P(e.productId)||{name:e.productId}).name),
         el("td",{class:"dim"},e.pack),
@@ -2044,6 +2092,8 @@ function viewStocktake(pane,ctl){
         el("td",{class:"cell"},qty),
         el("td",{class:"cell"},erp),
         el("td",{class:"num"+(diff?" neg":"")},diff==null?"—":(diff>0?"+":"")+n0(diff)),
+        el("td",{class:"cell"},note),
+        el("td",{class:"cell mid"},rc),
         el("td",{class:"cell"},bb),
         el("td",{class:"mono dim"},fmtD(sb)),
         el("td",{class:"num"},d==null?"—":String(d)),
@@ -2051,39 +2101,22 @@ function viewStocktake(pane,ctl){
           onclick:()=>{if(!confirm("Remove this line from the stocktake?"))return;
             st.entries=st.entries.filter(x=>x.id!==e.id);stSave(st);render();}},"×"))));
     }
+    if(!body.children.length) continue;      /* nothing here to re-count */
     tb.append(body); w.append(tb); c.append(w); pane.append(c);
   }
-  pane.append(stNotes(st));
 }
-/* ---- notes against a SKU ----
-   Anything worth saying about a beer this week — a damaged pallet, a line
-   that never got counted, a batch to watch. Kept with the count itself, so it
-   is still there when the week is looked at again. */
-function stNotes(st){
-  st.notes=st.notes||{};
-  const counted=[...new Set((st.entries||[]).map(e=>skuId(e.productId,e.pack)))]
-    .map(id=>skus().find(s=>s.id===id)).filter(Boolean)
-    .sort((a,b)=>(a.product.name+a.pack).localeCompare(b.product.name+b.pack));
-  const written=Object.keys(st.notes).filter(k=>(st.notes[k]||"").trim()).length;
-  const c=el("div",{class:"card"});
-  c.append(el("header",{},el("h3",{},"Notes"),
-    el("span",{class:"chip"+(written?" acc":"")},written?written+" written":"none yet"),
-    el("span",{style:"flex:1"}),
-    el("span",{class:"hint"},"Kept with this week's count")));
-  const body=el("div",{class:"body",style:"display:flex;flex-direction:column;gap:6px"});
-  for(const s of counted){
-    body.append(el("label",{class:"row",style:"gap:10px;align-items:center"},
-      swatch(s.id,s.pack),
-      el("span",{style:"min-width:190px;font-size:13px"},s.product.name," ",el("span",{class:"dim"},s.pack)),
-      el("input",{type:"text",style:"flex:1",value:st.notes[s.id]||"",
-        placeholder:"anything worth remembering about this one",
-        onchange:ev=>{const v=ev.target.value.trim();
-          if(v) st.notes[s.id]=v; else delete st.notes[s.id];
-          stSave(st); reflow();}})));
-  }
-  if(!counted.length) body.append(el("div",{class:"empty"},"Nothing counted yet."));
-  c.append(body);
-  return c;
+/* ---- lines that aren't settled ----
+   A line disagreeing with the ERP, or flagged to be counted again. Re-count
+   mode shows nothing else, so a recount is a short list rather than a hunt
+   back through the whole sheet. */
+let stRecountOnly=false;
+function stDiff(e){
+  return (e.qty!=null&&e.erp!=null)?Math.round((e.qty-e.erp)*100)/100:null;
+}
+function needsRecount(e){ return !!e.recount||!!stDiff(e); }
+function recountCount(st){ return (st.entries||[]).filter(needsRecount).length; }
+function unexplained(st){
+  return (st.entries||[]).filter(e=>stDiff(e)&&!(e.note||"").trim()).length;
 }
 /* ---- what this line held last time ----
    Matched on the batch where there is one, since that is the same physical
