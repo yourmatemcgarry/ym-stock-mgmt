@@ -1,32 +1,20 @@
 [build]
-  publish = "public"
+  publish = "."
+  functions = "netlify/functions"
+  edge_functions = "netlify/edge-functions"
 
-[functions]
-  node_bundler = "esbuild"
+# Round 104: automated weekly data refresh. Checks the FTP mailbox daily at 5am AEST (7pm UTC the
+# day before, since Netlify cron runs in UTC) and only actually publishes when a genuinely newer
+# export has landed - most days this is a fast no-op. Change the cron string below to adjust the
+# check time; see https://docs.netlify.com/functions/scheduled-functions/ for syntax.
+[functions."scheduled-data-refresh"]
+  schedule = "0 19 * * *"
 
-# The stock figures are commercial data. Keep the site out of search engines
-# even though the URL isn't published anywhere.
-[[headers]]
-  for = "/*"
-  [headers.values]
-    X-Robots-Tag = "noindex, nofollow"
-    X-Frame-Options = "SAMEORIGIN"
-    X-Content-Type-Options = "nosniff"
-    Referrer-Policy = "no-referrer"
-
-[[headers]]
-  for = "/seed.json"
-  [headers.values]
-    Cache-Control = "no-store"
-
-# The whole app is one HTML file, so a cached copy of it is a cached copy of
-# the whole site. Never let a browser hold onto it: every visit checks.
-[[headers]]
-  for = "/"
-  [headers.values]
-    Cache-Control = "no-store, must-revalidate"
-
-[[headers]]
-  for = "/index.html"
-  [headers.values]
-    Cache-Control = "no-store, must-revalidate"
+# Round 106: shared team-password login. This Edge Function runs in front of every request (the
+# site itself and every Netlify Function) and only lets it through if the visitor has a valid
+# signed session cookie - see netlify/edge-functions/auth-gate.mjs for the full explanation and
+# the two environment variables (SITE_PASSWORD, SESSION_SECRET) it needs set in Netlify site
+# settings before login will work.
+[[edge_functions]]
+  function = "auth-gate"
+  path = "/*"
