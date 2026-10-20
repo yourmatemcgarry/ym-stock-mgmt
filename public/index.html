@@ -94,6 +94,33 @@ table.mini td.num,table.mini th.num{text-align:right;font-family:var(--mono)}
 .fg td.plan{color:var(--muted);font-style:italic}
 .fg td.inp.plan input::placeholder{color:var(--muted);opacity:1;font-style:italic}
 .fg td.v.past.plan button{color:var(--muted);font-style:italic}
+/* ---- the tank board ---- */
+.tank{font-size:12px;user-select:none}
+.trow{display:flex;align-items:stretch;border-bottom:1px solid var(--line-soft);min-height:30px}
+.trow.thead{position:sticky;top:0;z-index:6;background:var(--surface-2);min-height:26px}
+.trow.warnrow .tname{background:var(--warn-soft)}
+.tname{position:sticky;left:0;z-index:4;width:150px;flex:none;background:var(--surface);
+  display:flex;align-items:center;gap:8px;padding:4px 10px;border-right:1px solid var(--line)}
+.trow.thead .tname{background:var(--surface-2);z-index:7}
+.tname.bad b{color:var(--warn)}
+.tlane{position:relative;flex:1;min-height:30px}
+.tday{position:absolute;top:0;bottom:0;border-right:1px solid var(--line-soft)}
+.tday.mon{border-right-color:var(--line);background:var(--sunk)}
+.trow.thead .tday{display:flex;align-items:center;padding-left:3px}
+.trow.thead .tday b{font:600 9px/1 var(--mono);color:var(--muted);white-space:nowrap}
+.tday.today{background:var(--accent-soft)}
+.tbar{position:absolute;top:3px;bottom:3px;border-radius:4px;color:#06121a;
+  display:flex;align-items:center;cursor:grab;overflow:hidden;
+  box-shadow:0 1px 2px rgba(0,0,0,.35)}
+.tbar.dragging{cursor:grabbing;opacity:.75;z-index:9}
+.tbar.over{outline:2px solid var(--crit);outline-offset:-2px}
+.tbar .lab{flex:1;padding:0 6px;font:600 10.5px/1 var(--sans);white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis}
+.tbar .grab{width:7px;align-self:stretch;flex:none;cursor:ew-resize;
+  background:rgba(0,0,0,.18)}
+.tl tr.brandrow td{background:var(--surface-2)}
+.tl td.neg{color:var(--crit);font-weight:600}
+.tl.outlook td.v{text-align:right;font-family:var(--mono);font-size:11.5px;padding-right:6px}
 /* a stocktake line that disagrees with the ERP and hasn't been explained */
 input.cellinp.owes{background:var(--warn-soft);box-shadow:inset 0 0 0 1px var(--warn)}
 input.cellinp.owes::placeholder{color:var(--warn);opacity:.9}
@@ -355,7 +382,7 @@ dialog footer{padding:12px 16px;border-top:1px solid var(--line-soft);display:fl
 /* Which build this is. It shows at the bottom of the sidebar and on Setup, so
    there is never any doubt about whether a deploy actually landed: if the
    stamp hasn't changed after deploying, the browser is still on the old file. */
-const BUILD="2026-10-20b · this week keeps its plan; top-up targets editable";
+const BUILD="2026-10-20c · tank board, brand colours, per-SKU volumes";
 /* ============================ helpers ============================ */
 const $ = (s,r)=> (r||document).querySelector(s);
 const el = (t,a,...k)=>{const n=document.createElement(t);
@@ -392,6 +419,8 @@ const addMonths=(s,m)=>{const x=D(s);const d=x.getUTCDate();x.setUTCDate(1);x.se
 const PACKS=["Can","10 Pack","Keg","30L Keg"];
 const PACK_UNIT={"Can":"Cartons","10 Pack":"Cartons","Keg":"50L Kegs","30L Keg":"30L Kegs"};
 const PACK_SHELF={"Can":12,"10 Pack":12,"Keg":6,"30L Keg":6};
+/* litres in one unit, before a product sets its own */
+const LPU={"Can":24*0.375,"10 Pack":10*0.375,"Keg":50,"30L Keg":30};
 const BASES={prior_year:"Prior year",recent_avg:"Recent average",manual:"Manual entry",
              flat:"Flat number",model:"Like another SKU",planned:"Distributor plan"};
 const BASIS_HINT={prior_year:"The same week a year ago",
@@ -1408,25 +1437,30 @@ function seedBanner(){
   bar.append(body); return bar;
 }
 
-/* ---- a colour per SKU ----
-   Set in Setup, used anywhere a SKU is named. Until one is chosen the id picks
-   a stable colour of its own, so nothing is ever grey-on-grey by accident. */
-const PACK_TINT={"Can":0,"10 Pack":28,"Keg":180,"30L Keg":205};
-function skuColour(skuId,pack){
-  const p=P((skuId||"").split("__")[0]);
-  const code=pack||(skus().find(x=>x.id===skuId)||{}).pack;
-  const set=p&&p.colour&&code&&p.colour[code];
+/* ---- a colour per brand ----
+   One colour for the beer, not for each pack of it, so Larry is the same
+   colour wherever it appears — the forecast, the stocktake, the tank
+   timeline. Set in Setup; until one is chosen the name picks a stable colour
+   of its own, so nothing is ever grey-on-grey by accident. */
+function brandColour(productId){
+  const p=P(productId);
+  /* an earlier build kept a colour per pack: take the first one it has */
+  let set=p&&p.colour;
+  if(set&&typeof set==="object") set=Object.values(set).filter(Boolean)[0];
   if(set) return set;
-  let n=0; for(const ch of String(skuId)) n=(n*31+ch.charCodeAt(0))&0xffff;
-  const h=(n%360+(PACK_TINT[code]||0))%360;
+  let n=0; for(const ch of String(productId||"")) n=(n*31+ch.charCodeAt(0))&0xffff;
+  const h=n%360;
   const f=v=>Math.round(v).toString(16).padStart(2,"0");
   /* a fixed saturation and lightness keeps the whole set readable together */
-  const a=0.52, l=0.56, k=n=>(n+h/30)%12, m=(n)=>l-a*Math.min(l,1-l)*Math.max(-1,Math.min(k(n)-3,Math.min(9-k(n),1)));
+  const a=0.52, l=0.56, k=q=>(q+h/30)%12,
+        m=q=>l-a*Math.min(l,1-l)*Math.max(-1,Math.min(k(q)-3,Math.min(9-k(q),1)));
   return "#"+f(m(0)*255)+f(m(8)*255)+f(m(4)*255);
 }
-function swatch(skuId,pack){
-  return el("span",{class:"sw",style:"background:"+skuColour(skuId,pack),
-    title:"SKU colour — set it in Setup"});
+/* most callers hold a sku id; the brand is its first half */
+function skuColour(skuId){ return brandColour(String(skuId||"").split("__")[0]); }
+function swatch(skuId){
+  return el("span",{class:"sw",style:"background:"+skuColour(skuId),
+    title:"Brand colour — set it in Setup"});
 }
 function skuLabel(id){
   const s=skus().find(x=>x.id===id);
@@ -2130,7 +2164,7 @@ function viewStocktake(pane,ctl){
           stSave(st); reflow();}});
       body.append(el("tr",{class:"stripe "+(e.recount?"warn ":"")+(d==null?"":d<=0?"crit":d<=28?"warn":""),
           "data-zero":String(e.qty==null)},
-        el("td",{},swatch(skuId(e.productId,e.pack),e.pack),(P(e.productId)||{name:e.productId}).name),
+        el("td",{},swatch(e.productId),(P(e.productId)||{name:e.productId}).name),
         el("td",{class:"dim"},e.pack),
         el("td",{class:"cell"},bat),
         el("td",{class:"cell"},ar),
@@ -2340,6 +2374,49 @@ function syncPacks(b,keep,prodId,packId){
    from its brew week to its pack week, so a crowded fortnight is visible as a
    stack of bars rather than a list of dates. */
 let prodWeeks = 26;
+/* ---- tanks ----
+   The vessels a brew can sit in, with what they hold. Kept on the config so
+   they travel with the site rather than needing their own collection. A run
+   names one tank and occupies it from its brew date to its pack date; several
+   runs of the same beer can share a tank while they fit inside it. */
+const TANK_SEED=[
+  ["101",1000],["201",2400],["202",2400],["203",2400],["204",2400],
+  ["401",4800],["404",4800],
+  ["FV-01",10000],["FV-02",10000],["FV-03",10000],["FV-04",6000],["FV-05",6000],
+  ["FV-06",8000],["FV-07",20000],["FV-08",20000],["FV-09",20000],["FV-10",20000],
+  ["FV-11",4000],["FV-12",4000],
+  ["Pilot-1",200],["Pilot-2",200],["Pilot-3",200],["Pilot-4",200],
+  ["STAGING",8000],
+  ["BBT-01",10000],["BBT-02",4000],["BBT-03",20000]];
+function tanks(){ return (S.config.tanks||[]).filter(t=>t&&t.name); }
+function tankOf(name){ return tanks().find(t=>t.name===name)||null; }
+function seedTanks(){
+  S.config.tanks=TANK_SEED.map(([name,cap])=>({name,cap}));
+  saveConfig();
+}
+/* every run sitting in a tank on a given day */
+function tankRuns(name,from,to){
+  return S.runs.filter(r=>r.tank===name&&r.status!=="cancelled"
+    &&(r.brewDate||r.packDate)<=to&&r.packDate>=from);
+}
+/* what a tank is holding, and where it is in trouble: more litres than it
+   takes, or two different beers in it at once */
+function tankTrouble(name){
+  const t=tankOf(name); if(!t) return [];
+  const rs=S.runs.filter(r=>r.tank===name&&r.status!=="cancelled"&&r.packDate);
+  const days=new Set();
+  for(const r of rs){ days.add(r.brewDate||r.packDate); days.add(r.packDate); }
+  const out=[];
+  for(const d of days){
+    const on=rs.filter(r=>(r.brewDate||r.packDate)<=d&&r.packDate>=d);
+    if(!on.length) continue;
+    const vol=sum(on.map(brewLitres));
+    const brands=[...new Set(on.map(r=>r.productId))];
+    if(vol>t.cap+0.5) out.push({day:d,kind:"over",vol:Math.round(vol),cap:t.cap,runs:on.length});
+    else if(brands.length>1) out.push({day:d,kind:"mixed",brands,runs:on.length});
+  }
+  return out;
+}
 function brewWeek(r){ return monday(r.brewDate||r.packDate); }
 function packWeek(r){ return monday(r.packDate); }
 function capacityRows(weeks){
@@ -2441,6 +2518,273 @@ function productionTimeline(pane){
   pane.append(card);
   return {weeks,brew,pack,over};
 }
+/* ---- the tank board ----
+   One row per tank, one column per day. A run sits in its tank from the day it
+   goes in to the day it is packaged. Double-click a bar to open the run; drag
+   it to move it to another tank or another day; drag either end to change how
+   long it is in tank. A tank goes amber when what is in it on some day adds up
+   to more than it holds, or when two different beers are in it at once. */
+let tankDays=56, tankFrom=null;
+const DAYW=18;
+function tankTimeline(pane){
+  const list=tanks();
+  const card=el("div",{class:"card"});
+  const start=tankFrom||iso(new Date(D(S.config.currentWeek)-7*DAY));
+  card.append(el("header",{},el("h3",{},"Tanks"),
+    el("span",{class:"hint"},list.length?"Drag a brew to move it; double-click to open it":"No tanks set up yet"),
+    el("span",{style:"flex:1"}),
+    el("button",{class:"btn sm",onclick:()=>{tankFrom=iso(new Date(D(start)-28*DAY));render();}},"◀ 4 wks"),
+    el("button",{class:"btn sm",onclick:()=>{tankFrom=null;render();}},"Today"),
+    el("button",{class:"btn sm",onclick:()=>{tankFrom=iso(new Date(+D(start)+28*DAY));render();}},"4 wks ▶"),
+    sel([[28,"4 weeks"],[56,"8 weeks"],[84,"12 weeks"]],tankDays,
+      {onchange:e=>{tankDays=+e.target.value;render();}})));
+  if(!list.length){
+    card.append(el("div",{class:"empty"},el("b",{},"No tanks yet"),
+      "Add them under Setup, or load the brewery's list there."));
+    pane.append(card); return;
+  }
+  const days=[]; for(let i=0;i<tankDays;i++) days.push(iso(new Date(+D(start)+i*DAY)));
+  const dayIx={}; days.forEach((d,i)=>dayIx[d]=i);
+  const scroll=el("div",{class:"scroll tall"});
+  const grid=el("div",{class:"tank",style:"width:"+(150+days.length*DAYW)+"px"});
+
+  /* the date strip: a tick every Monday, so a week is readable at a glance */
+  const head=el("div",{class:"trow thead"});
+  head.append(el("div",{class:"tname"},"Tank"));
+  const lane=el("div",{class:"tlane"});
+  days.forEach((d,i)=>{
+    const dd=D(d), mon=dd.getUTCDay()===1;
+    const c=el("div",{class:"tday"+(mon?" mon":"")+(d===iso(new Date())?" today":""),
+      style:"left:"+(i*DAYW)+"px;width:"+DAYW+"px"});
+    if(mon) c.append(el("b",{},fmtW(d)));
+    c.title=fmtD(d);
+    lane.append(c);
+  });
+  head.append(lane); grid.append(head);
+
+  for(const t of list){
+    const row=el("div",{class:"trow"});
+    const bad=tankTrouble(t.name).filter(x=>dayIx[x.day]!=null);
+    row.append(el("div",{class:"tname"+(bad.length?" bad":"")},
+      el("b",{},t.name),el("span",{class:"hint"},n0(t.cap)+" L")));
+    const l=el("div",{class:"tlane","data-tank":t.name});
+    days.forEach((d,i)=>l.append(el("div",{class:"tday"+(D(d).getUTCDay()===1?" mon":""),
+      style:"left:"+(i*DAYW)+"px;width:"+DAYW+"px"})));
+    /* several brews can share a tank, so overlapping bars stack rather than
+       hide each other, and the row grows to fit them */
+    const mine=S.runs.filter(r=>r.tank===t.name&&r.status!=="cancelled"&&r.packDate)
+      .map(r=>({r,b0:r.brewDate||iso(new Date(D(r.packDate)-((P(r.productId)||{}).brewToPackDays||21)*DAY))}))
+      .filter(x=>x.r.packDate>=days[0]&&x.b0<=days[days.length-1])
+      .sort((a,b)=>a.b0<b.b0?-1:1);
+    const ends=[];
+    for(const x of mine){
+      let k=ends.findIndex(e=>e<x.b0);
+      if(k<0){ k=ends.length; ends.push(""); }
+      ends[k]=x.r.packDate; x.lane=k;
+    }
+    if(ends.length>1) l.style.minHeight=(ends.length*26+6)+"px";
+    for(const x of mine){
+      const r=x.r, b0=x.b0;
+      const i0=Math.max(0,dayIx[b0]!=null?dayIx[b0]:0);
+      const i1=Math.min(days.length-1,dayIx[r.packDate]!=null?dayIx[r.packDate]:days.length-1);
+      const vol=brewLitres(r);
+      const over=vol>t.cap+0.5;
+      const bar=el("div",{class:"tbar"+(over?" over":""),"data-run":r.id,
+        style:"left:"+(i0*DAYW+1)+"px;width:"+((i1-i0+1)*DAYW-2)+"px;"
+             +(ends.length>1?"top:"+(3+x.lane*26)+"px;height:22px;bottom:auto;":"")
+             +"background:"+brandColour(r.productId)});
+      bar.title=(P(r.productId)||{}).name+" "+r.pack+" · "+n0(runUnits(r))+" "
+        +(PACK_UNIT[r.pack]||"units").toLowerCase()+" · "+n0(vol)+" L in tank\n"
+        +fmtD(b0)+" → "+fmtD(r.packDate)+" ("+dDiff(b0,r.packDate)+" days)"
+        +(over?"\nOver this tank's "+n0(t.cap)+" L":"");
+      bar.append(el("span",{class:"grab l"}));
+      bar.append(el("span",{class:"lab"},(P(r.productId)||{}).name+" "+r.pack+" · "+kl(vol)+"L"));
+      bar.append(el("span",{class:"grab r"}));
+      bar.addEventListener("dblclick",ev=>{ev.stopPropagation();newRun(null,null,null,r);});
+      bar.addEventListener("pointerdown",ev=>tankDrag(ev,r,days,start));
+      l.append(bar);
+    }
+    if(bad.length) row.classList.add("warnrow");
+    row.append(l); grid.append(row);
+  }
+  scroll.append(grid); card.append(scroll);
+
+  const trouble=list.map(t=>({t,bad:tankTrouble(t.name)})).filter(x=>x.bad.length);
+  if(trouble.length){
+    const n=el("div",{class:"note",style:"border-color:var(--warn)"});
+    n.append(el("b",{},"Tank clashes. "));
+    n.append(trouble.map(x=>{
+      const first=x.bad[0];
+      return x.t.name+" — "+(first.kind==="over"
+        ?(n0(first.vol)+" L in a "+n0(x.t.cap)+" L tank on "+fmtD(first.day))
+        :("two beers at once on "+fmtD(first.day)));
+    }).join("; "));
+    card.append(n);
+  }
+  pane.append(card);
+}
+/* dragging a bar: the body moves it, either end stretches it */
+function tankDrag(ev,r,days,start){
+  const bar=ev.currentTarget, lane=bar.parentNode;
+  const edge=ev.target.classList.contains("grab")
+    ? (ev.target.classList.contains("l")?"l":"r") : null;
+  const b0=r.brewDate||iso(new Date(D(r.packDate)-((P(r.productId)||{}).brewToPackDays||21)*DAY));
+  const x0=ev.clientX, y0=ev.clientY;
+  const span=dDiff(b0,r.packDate);
+  const w0=bar.offsetWidth;
+  bar.classList.add("dragging");
+  let moved=0, shift=0, tank=r.tank;
+  const lanes=[...document.querySelectorAll(".tank .tlane[data-tank]")];
+  const move=e=>{
+    const dx=e.clientX-x0, dy=e.clientY-y0;
+    moved=Math.max(moved,Math.abs(dx)+Math.abs(dy));
+    shift=Math.round(dx/DAYW);
+    if(edge==="l"){
+      bar.style.width=Math.max(DAYW-2,w0-shift*DAYW)+"px";
+      bar.style.transform="translateX("+(shift*DAYW)+"px)";
+    } else if(edge==="r"){
+      bar.style.width=Math.max(DAYW-2,(span+1+shift)*DAYW-2)+"px";
+    } else {
+      bar.style.transform="translateX("+(shift*DAYW)+"px) translateY("+dy+"px)";
+      const hit=lanes.find(l=>{const b=l.getBoundingClientRect();
+        return e.clientY>=b.top&&e.clientY<=b.bottom;});
+      tank=hit?hit.getAttribute("data-tank"):r.tank;
+    }
+  };
+  const up=()=>{
+    window.removeEventListener("pointermove",move);
+    window.removeEventListener("pointerup",up);
+    bar.classList.remove("dragging");
+    /* a click, not a drag: put the bar back where it was and leave the DOM
+       alone, or the second click of a double-click lands on a new element */
+    if(moved<4){ bar.style.transform=""; bar.style.width=w0+"px"; return; }
+    const shiftDays=d=>iso(new Date(+D(d)+shift*DAY));
+    if(edge==="l"){
+      const nb=shiftDays(b0);
+      if(nb<r.packDate) r.brewDate=nb;
+    } else if(edge==="r"){
+      const np=shiftDays(r.packDate);
+      if(np>b0) r.packDate=np;
+    } else {
+      r.brewDate=shiftDays(b0); r.packDate=shiftDays(r.packDate);
+      if(tank&&tank!==r.tank) r.tank=tank;
+    }
+    persist("runs",r); S.calcCache=null;
+    flash((P(r.productId)||{}).name+" "+r.pack+" → "+(r.tank||"no tank")+", "
+      +fmtD(r.brewDate)+" → "+fmtD(r.packDate));
+    render();
+  };
+  /* on the window, not the bar: the pointer leaves the bar as soon as it moves
+     to another tank's row, and the drag has to keep following it */
+  window.addEventListener("pointermove",move);
+  window.addEventListener("pointerup",up);
+  ev.preventDefault();
+}
+
+/* ---- the forecast, read for brewing ----
+   Per SKU, only the two lines that matter when you are deciding what to brew:
+   what is left in the coldroom at the end of each week, and what is booked to
+   be packaged. Grouped under the brand, with the brand's own weekly litres on
+   top — that total is what has to have been brewed to feed it. */
+function brandOutlook(pane,all){
+  const cw=S.config.currentWeek;
+  const weeks=[]; for(let i=0;i<prodWeeks;i++) weeks.push(wkAdd(cw,i));
+  const byBrand={};
+  for(const s of skus()){
+    if(s.product.forecast===false) continue;
+    const c=all[s.id]; if(!c) continue;
+    const packed=weeks.map(w=>i2(c,w,"in"));
+    const endSoh=weeks.map(w=>i2(c,w,"cold"));
+    if(!packed.some(v=>v>0)&&!endSoh.some(v=>v!=null)) continue;
+    (byBrand[s.product.id]=byBrand[s.product.id]||{p:s.product,rows:[]})
+      .rows.push({s,packed,endSoh,
+        litres:packed.map(u=>u*litresPerUnit(s.product.id,s.pack))});
+  }
+  const card=el("div",{class:"card"});
+  card.append(el("header",{},el("h3",{},"What the forecast needs brewed"),
+    el("span",{class:"hint"},"Coldroom at the end of each week against what is booked to be packaged"),
+    el("span",{style:"flex:1"}),
+    el("span",{class:"hint"},prodWeeks+" weeks")));
+  const scroll=el("div",{class:"scroll tall"});
+  const tb=el("table",{class:"tl outlook",style:"width:"+(230+weeks.length*46)+"px"});
+  const hr=el("tr",{},el("th",{class:"stick"},"Week commencing"));
+  weeks.forEach((w,i)=>{
+    const th=el("th",{class:"wkh"+(i===0?" now":"")},el("b",{},fmtW(w)),
+      i===0||D(w).getUTCMonth()===0&&D(wkAdd(w,-1)).getUTCMonth()===11
+        ?String(D(w).getUTCFullYear()).slice(2):"");
+    th.title=w; hr.append(th);
+  });
+  tb.append(el("thead",{},hr));
+  const body=el("tbody");
+  const brands=Object.values(byBrand).sort((a,b)=>(a.p.sort|0)-(b.p.sort|0));
+  for(const g of brands){
+    const col=brandColour(g.p.id);
+    /* the brand's week: every pack of it added up, in litres */
+    const tot=weeks.map((w,i)=>sum(g.rows.map(r=>r.litres[i])));
+    const trb=el("tr",{class:"cap brandrow"});
+    trb.append(el("td",{class:"stick"},el("div",{class:"lbl"},
+      el("span",{class:"sw",style:"background:"+col}),el("b",{},g.p.name),
+      el("span",{class:"hint"},"to brew"))));
+    tot.forEach((v,i)=>{
+      const td=el("td",{class:"v"+(v>0?"":" past")});
+      if(v>0){
+        /* what has to go in the tank, at each pack's own yield */
+        const brew=sum(g.rows.map(r=>r.packed[i]*litresPerUnit(g.p.id,r.s.pack)/yieldOf(g.p.id,r.s.pack)));
+        td.textContent=kl(brew);
+        td.title=n0(brew)+" L into tank for "+n0(v)+" L packaged";
+        td.style.color=col; td.style.fontWeight="600";
+      } else td.textContent="·";
+      trb.append(td);
+    });
+    body.append(trb);
+    for(const r of g.rows){
+      const tr1=el("tr",{});
+      tr1.append(el("td",{class:"stick"},el("div",{class:"lbl"},
+        el("span",{style:"padding-left:18px"},r.s.pack),
+        el("span",{class:"hint"},"packaging"))));
+      r.packed.forEach((v,i)=>{
+        const td=el("td",{class:"v"+(v>0?"":" past")});
+        if(v>0){ td.append(el("button",{class:"btn sm",style:"padding:1px 5px",
+          onclick:()=>editRunsForWeek(r.s.id,weeks[i])},n0(v))); }
+        else { td.textContent="·"; td.style.cursor="pointer";
+          td.title="Schedule a run"; td.onclick=()=>newRun(r.s.id,weeks[i]); }
+        tr1.append(td);
+      });
+      body.append(tr1);
+      const tr2=el("tr",{});
+      tr2.append(el("td",{class:"stick"},el("div",{class:"lbl"},
+        el("span",{style:"padding-left:18px;color:var(--muted)"},"coldroom, end of week"))));
+      r.endSoh.forEach((v,i)=>{
+        const td=el("td",{class:"v"+(v==null?" past":v<0?" neg":"")});
+        td.textContent=v==null?"·":n0(v);
+        tr2.append(td);
+      });
+      body.append(tr2);
+      body.append(el("tr",{class:"sep"},el("td",{colspan:weeks.length+1})));
+    }
+  }
+  tb.append(body); scroll.append(tb); card.append(scroll);
+  if(!brands.length) card.append(el("div",{class:"empty"},"Nothing forecast to package yet."));
+  pane.append(card);
+}
+/* a week's figure out of a computed SKU, past or forecast */
+function i2(c,w,what){
+  const pi=c.past.indexOf(w), fi=c.weeks.indexOf(w);
+  if(what==="in"){
+    if(pi>=0){const v=(c.pastIn||[])[pi];
+      return v!=null?v:sum(runsInWeek(c.sku,w).map(runUnits));}
+    return fi>=0?(c.beerIn[fi]||0):0;
+  }
+  if(pi>=0){
+    const s0=(c.pastCold||[])[pi]; if(s0==null) return null;
+    const inn=(c.pastIn||[])[pi]!=null?(c.pastIn||[])[pi]:sum(runsInWeek(c.sku,w).map(runUnits));
+    const out=(w===S.config.currentWeek)?c.outNow:((c.pastTotalOut||[])[pi]||0);
+    return Math.round(s0+inn+((c.pastBack||[])[pi]||0)-out);
+  }
+  return fi>=0?Math.round(c.cold[fi]):null;
+}
+const kl=v=>v>=10000?(Math.round(v/100)/10)+"k":n0(v);
+
 function viewProduction(pane,ctl){
   ctl.append(el("button",{class:"btn pri",onclick:()=>newRun()},"Schedule run"));
   const all=computeAll(), a=alertsSafe();
@@ -2460,6 +2804,8 @@ function viewProduction(pane,ctl){
     overW.length?"first "+fmtD(overW[0]):"inside capacity",overW.length?"alert":"good"));
   pane.append(t);
   productionTimeline(pane);
+  tankTimeline(pane);
+  brandOutlook(pane,all);
 
   if(a.filter(x=>x.sev!=="ok").length){
     const c=el("div",{class:"card"});
@@ -2512,8 +2858,25 @@ function viewProduction(pane,ctl){
   pane.append(el("div",{class:"note"},el("b",{},"Brew-to-pack time "),
     "is set per product in Setup (default 21 days). Change it there and every brew-by date on this page moves with it."));
 }
-const LPU={"Can":24*0.375,"10 Pack":10*0.375,"Keg":50,"30L Keg":30};
-function litres(r){return runUnits(r)*(LPU[r.pack]||1);}
+/* Litres in one unit of a pack. The defaults above are the standard sizes; a
+   product can set its own in Setup, which is what a short-fill carton or an
+   odd keg needs. */
+function packSpec(productId,pack){
+  const p=P(productId);
+  return ((p&&p.packs)||[]).find(q=>q.code===pack)||{};
+}
+function litresPerUnit(productId,pack){
+  const v=num(packSpec(productId,pack).litres);
+  return v!=null&&v>0?v:(LPU[pack]||1);
+}
+function yieldOf(productId,pack){
+  const v=num(packSpec(productId,pack).efficiency);
+  return v!=null&&v>0&&v<=100?v/100:0.9;
+}
+/* what comes out of the run, packaged */
+function litres(r){ return runUnits(r)*litresPerUnit(r.productId,r.pack); }
+/* and what has to go into the tank to get it, at this SKU's yield */
+function brewLitres(r){ return litres(r)/yieldOf(r.productId,r.pack); }
 
 function newRun(sku,packDate,units,existing){
   const s=sku?{pid:sku.split("__")[0],pack:(skus().find(x=>x.id===sku)||{}).pack}:null;
@@ -2535,7 +2898,8 @@ function newRun(sku,packDate,units,existing){
       el("div",{})));
     b.append(el("div",{class:"grid2"},
       field("Status",sel([["planned","Planned"],["confirmed","Confirmed"],["cancelled","Cancelled"]],r.status,{id:"rs"})),
-      el("div",{})));
+      field("Tank",sel([["","— not allocated —"],...tanks().map(t=>[t.name,t.name+"  ·  "+n0(t.cap)+" L"])],
+        r.tank||"",{id:"rt"}),"Where it ferments until it's packaged")));
     b.append(el("div",{class:"note",id:"rbrew"},"—"));
     b.append(field("Note",el("input",{type:"text",id:"rn",value:r.note||"",placeholder:"Tank 4, double batch"})));
     if(existing) b.append(el("button",{class:"btn danger",type:"button",style:"align-self:flex-start",
@@ -2546,6 +2910,8 @@ function newRun(sku,packDate,units,existing){
     const rec={id:r.id,productId:$("#rp",body).value,pack:$("#rk",body).value,packDate:$("#rd",body).value,
       units:num($("#ru",body).value)||0,status:$("#rs",body).value,note:$("#rn",body).value.trim()};
     if(act!=null) rec.actualUnits=act;
+    const tk=$("#rt",body)?$("#rt",body).value:"";
+    if(tk) rec.tank=tk;
     if(!rec.packDate||!rec.units){flash("A run needs a pack date and a quantity");return false;}
     const p=P(rec.productId)||{};
     /* a brew date typed in stands; left alone it follows the product's lead time */
@@ -3233,7 +3599,7 @@ function viewSetup(pane,ctl){
   for(const p of S.products.slice().sort((a,b)=>(a.forecast===false)-(b.forecast===false)||(a.sort|0)-(b.sort|0))){
     pb.append(el("tr",{},
       el("td",{},el("span",{class:"row",style:"gap:7px;align-items:center"},
-        ...(p.packs||[]).slice(0,4).map(q=>swatch(p.id+"__"+slug(q.code),q.code)),
+        swatch(p.id),
         el("b",{},p.name))),
       el("td",{class:"dim"},(p.packs||[]).map(q=>q.code).join(", ")||"—"),
       el("td",{class:"dim mono"},(p.packs||[]).map(q=>q.code.replace("30L Keg","30L")+" "+q.shelfLifeMonths+"m").join("  ")||"—"),
@@ -3242,6 +3608,41 @@ function viewSetup(pane,ctl){
       el("td",{},el("button",{class:"btn sm",onclick:()=>editProduct(p)},"Edit"))));
   }
   pt.append(pb);pw.append(pt);pc.append(pw);pane.append(pc);
+
+  /* the tanks a brew can sit in */
+  const tc=el("div",{class:"card"});
+  tc.append(el("header",{},el("h3",{},"Tanks"),
+    el("span",{class:"chip"},tanks().length+" tanks"),
+    el("span",{class:"chip acc"},n0(sum(tanks().map(t=>t.cap)))+" L"),
+    el("span",{style:"flex:1"}),
+    el("button",{class:"btn sm",title:"Add a tank",onclick:()=>editTank()},"Add tank"),
+    tanks().length?null:el("button",{class:"btn sm pri",
+      title:"Load the brewery's own tank list",
+      onclick:()=>{seedTanks();flash(tanks().length+" tanks loaded");render();}},"Load our tanks")));
+  if(tanks().length){
+    const tw=el("div",{class:"scroll"}),tt=el("table");
+    tt.append(el("thead",{},el("tr",{},el("th",{},"Tank"),el("th",{class:"num"},"Capacity"),
+      el("th",{},"In it now"),el("th",{},"Clashes"),el("th",{},""))));
+    const tbb=el("tbody");
+    const cw=S.config.currentWeek;
+    for(const t of tanks()){
+      const on=tankRuns(t.name,cw,wkAdd(cw,1));
+      const bad=tankTrouble(t.name);
+      tbb.append(el("tr",{},
+        el("td",{},el("b",{},t.name)),
+        el("td",{class:"num mono"},n0(t.cap)+" L"),
+        el("td",{class:"dim"},on.length
+          ?on.map(r=>(P(r.productId)||{}).name+" "+r.pack).join(", "):"—"),
+        el("td",{},bad.length?el("span",{class:"chip warn"},bad.length+" to sort")
+                             :el("span",{class:"chip ok"},"clear")),
+        el("td",{},el("button",{class:"btn sm",onclick:()=>editTank(t)},"Edit"))));
+    }
+    tt.append(tbb);tw.append(tt);tc.append(tw);
+  } else {
+    tc.append(el("div",{class:"empty"},el("b",{},"No tanks yet"),
+      "Load the brewery's list, or add them one at a time."));
+  }
+  pane.append(tc);
 
   /* where stock sits inside a location — the stocktake's "Where" column */
   const ac=el("div",{class:"card"});
@@ -3372,21 +3773,31 @@ function editProduct(p){
       field("Brew → pack",el("input",{type:"number",id:"pb",value:rec.brewToPackDays||21,min:"0"}),"Days"),
       field("Include in forecast",sel([["yes","Yes — full forecast"],["no","No — track stock only"]],
         rec.forecast===false?"no":"yes",{id:"pf"}))));
+    b.append(el("div",{class:"row",style:"align-items:center;gap:10px"},
+      el("span",{class:"fld",style:"margin:0"},"Brand colour"),
+      el("input",{type:"color",class:"swin",id:"pc",value:brandColour(rec.id||"new")}),
+      el("span",{class:"hint"},"Used for this beer everywhere — forecast, stocktake, tank timeline")));
     b.append(el("div",{class:"fld"},"Packs"));
     const pk=el("div",{class:"body",style:"padding:0;display:flex;flex-direction:column;gap:8px"});
     for(const code of PACKS){
       const q=(rec.packs||[]).find(x=>x.code===code);
       const on=el("input",{type:"checkbox",id:"pk-"+slug(code),checked:!!q});
       const sh=el("input",{type:"number",id:"sh-"+slug(code),value:(q&&q.shelfLifeMonths)||PACK_SHELF[code],
-        min:"1",max:"60",style:"width:70px"});
-      /* a colour per SKU, so a beer is the same colour wherever it appears */
-      const cl=el("input",{type:"color",class:"swin",id:"cl-"+slug(code),
-        value:skuColour((rec.id||slug($("#pn",b)?$("#pn",b).value:"x"))+"__"+slug(code),code),
-        title:"Colour for "+code});
-      pk.append(el("div",{class:"row",style:"align-items:center"},
-        el("label",{class:"row",style:"align-items:center;gap:7px;min-width:130px"},on,el("span",{},code)),
-        el("span",{class:"hint"},"shelf life"),sh,el("span",{class:"hint"},"months · "+PACK_UNIT[code]),
-        el("span",{style:"flex:1"}),el("span",{class:"hint"},"colour"),cl));
+        min:"1",max:"60",style:"width:64px"});
+      /* how much beer one of these holds, and how much has to be brewed to
+         fill it — the figures the tank timeline and the brew volumes run on */
+      const lt=el("input",{type:"number",id:"lt-"+slug(code),step:"0.01",min:"0",style:"width:74px",
+        value:(q&&q.litres!=null)?q.litres:(LPU[code]||""),
+        title:"Litres in one "+(PACK_UNIT[code]||"unit").toLowerCase()});
+      const ef=el("input",{type:"number",id:"ef-"+slug(code),step:"1",min:"1",max:"100",style:"width:64px",
+        value:(q&&q.efficiency!=null)?q.efficiency:90,
+        title:"How much of what goes into the tank ends up packaged"});
+      pk.append(el("div",{class:"row",style:"align-items:center;gap:6px"},
+        el("label",{class:"row",style:"align-items:center;gap:7px;min-width:118px"},on,el("span",{},code)),
+        el("span",{class:"hint"},"shelf"),sh,el("span",{class:"hint"},"m"),
+        el("span",{class:"hint",style:"margin-left:6px"},"litres"),lt,
+        el("span",{class:"hint"},"per "+(PACK_UNIT[code]||"unit").toLowerCase().replace(/s$/,"")),
+        el("span",{class:"hint",style:"margin-left:6px"},"yield"),ef,el("span",{class:"hint"},"%")));
     }
     b.append(pk);
     b.append(el("div",{class:"note"},"Send-by is best before minus half the shelf life set here, ",
@@ -3404,9 +3815,11 @@ function editProduct(p){
     rec.brewToPackDays=num($("#pb",body).value)||21;
     rec.forecast=$("#pf",body).value==="yes";
     rec.packs=PACKS.filter(c=>$("#pk-"+slug(c),body).checked).map(c=>({code:c,unitLabel:PACK_UNIT[c],
-      shelfLifeMonths:num($("#sh-"+slug(c),body).value)||PACK_SHELF[c],active:true}));
-    rec.colour=rec.colour||{};
-    for(const c of PACKS){ const inp=$("#cl-"+slug(c),body); if(inp) rec.colour[c]=inp.value; }
+      shelfLifeMonths:num($("#sh-"+slug(c),body).value)||PACK_SHELF[c],
+      litres:num($("#lt-"+slug(c),body).value)||LPU[c]||0,
+      efficiency:Math.min(100,Math.max(1,num($("#ef-"+slug(c),body).value)||90)),
+      active:true}));
+    rec.colour=$("#pc",body)?$("#pc",body).value:rec.colour;
     if(isNew) S.products.push(rec);
     S.products.sort((a,b2)=>(a.sort|0)-(b2.sort|0));
     persist("products",rec);
@@ -3424,6 +3837,30 @@ function editProduct(p){
       }
       flash(name+" saved — channels copied to "+n+" pack"+(n===1?"":"s"));
     } else flash(name+" saved");
+  });
+}
+function editTank(t){
+  const isNew=!t;
+  const rec=t||{name:"",cap:10000};
+  openDialog(isNew?"Add tank":"Tank "+rec.name,b=>{
+    b.append(el("div",{class:"grid2"},
+      field("Name",el("input",{type:"text",id:"tn",value:rec.name,placeholder:"FV-07"})),
+      field("Capacity",el("input",{type:"number",id:"tc",value:rec.cap,min:"1",step:"100"}),"Litres")));
+    if(!isNew){
+      const on=S.runs.filter(x=>x.tank===rec.name&&x.status!=="cancelled").length;
+      b.append(el("div",{class:"note"},on?(on+" run"+(on===1?"":"s")+" allocated to this tank. "
+        +"Renaming it leaves them pointing at the old name."):"Nothing allocated to this tank."));
+      b.append(el("button",{class:"btn danger",type:"button",style:"align-self:flex-start",
+        onclick:()=>{S.config.tanks=tanks().filter(x=>x.name!==rec.name);saveConfig();
+          $("#dlg").close();render();flash(rec.name+" removed");}},"Remove tank"));
+    }
+  },body=>{
+    const name=$("#tn",body).value.trim(), cap=num($("#tc",body).value)||0;
+    if(!name||cap<=0){flash("A tank needs a name and a capacity");return false;}
+    const list=tanks().slice();
+    const i=list.findIndex(x=>x===t);
+    if(i>=0) list[i]={name,cap}; else list.push({name,cap});
+    S.config.tanks=list; saveConfig(); flash(name+" saved");
   });
 }
 function editLocation(l){
