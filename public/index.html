@@ -386,7 +386,7 @@ dialog footer{padding:12px 16px;border-top:1px solid var(--line-soft);display:fl
 /* Which build this is. It shows at the bottom of the sidebar and on Setup, so
    there is never any doubt about whether a deploy actually landed: if the
    stamp hasn't changed after deploying, the browser is still on the old file. */
-const BUILD="2026-10-20d · weekly tank schedule, split tanks, run volumes";
+const BUILD="2026-10-20e · non-core range screen";
 /* ============================ helpers ============================ */
 const $ = (s,r)=> (r||document).querySelector(s);
 const el = (t,a,...k)=>{const n=document.createElement(t);
@@ -1298,9 +1298,11 @@ const ICONS={
  production:'<path d="M4 20V9l5 3V9l5 3V4l6 3v13z"/>',
  ageing:'<circle cx="12" cy="12" r="8"/><path d="M12 7v5l3 2"/>',
  review:'<path d="M4 19V5"/><path d="M4 19h16"/><path d="M8 15l4-6 3 3 4-6"/>',
+ noncore:'<path d="M12 3l2.4 5.3 5.6.6-4.2 3.9 1.2 5.6L12 15.6 6.9 18.4l1.2-5.6L4 8.9l5.6-.6z"/>',
  setup:'<path d="M4 6h16M4 12h16M4 18h16"/><circle cx="9" cy="6" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="8" cy="18" r="2"/>'};
 const VIEWS=[
  {id:"forecast",label:"Forecast",title:"Forecast",sub:"Monday afternoon: what's going out this week, and the weeks after it"},
+ {id:"noncore",label:"Non-core",title:"Non-core range",sub:"Seasonals, one-offs and anything that isn't part of the core range"},
  {id:"stocktake",label:"Stocktake",title:"Weekly stocktake",sub:"Batch-level counts by location — the numbers everything else runs on"},
  {id:"production",label:"Production",title:"Production schedule",sub:"Planned packaging runs and the brew dates they imply"},
  {id:"ageing",label:"Aged stock",title:"Aged stock",sub:"Best before, send-by cut-offs and what needs moving"},
@@ -1309,12 +1311,16 @@ const VIEWS=[
 
 function drawNav(){
   const n=clear($("#nav")), a=alertsSafe();
-  const crit=a.filter(x=>x.sev==="crit").length;
   const aged=S.ready?ageRows().filter(r=>r.status==="expired"||r.status==="pastsend").length:0;
   for(const v of VIEWS){
     const b=el("button",{"aria-current":String(S.view===v.id),onclick:()=>go(v.id)},
       el("span",{html:'<svg viewBox="0 0 24 24">'+ICONS[v.id]+'</svg>'}).firstChild, v.label);
-    if(v.id==="forecast"&&crit) b.append(el("span",{class:"ct"},String(crit)));
+    /* the run-dry count on each forecast tab counts only that tab's beers */
+    if(v.id==="forecast"||v.id==="noncore"){
+      const ids=new Set(skusInRange(v.id==="noncore"?"noncore":"core").map(s=>s.id));
+      const n=a.filter(x=>x.sev==="crit"&&ids.has(x.sku)).length;
+      if(n) b.append(el("span",{class:"ct"},String(n)));
+    }
     if(v.id==="ageing"&&aged) b.append(el("span",{class:"ct"},String(aged)));
     n.append(b);
   }
@@ -1408,7 +1414,7 @@ function render(){
   const pane=clear($("#pane")), ctl=clear($("#topctl"));
   if(S.seedUpdate) pane.append(seedBanner());
   try{
-    ({forecast:viewForecast,stocktake:viewStocktake,
+    ({forecast:viewForecast,noncore:viewForecast,stocktake:viewStocktake,
       production:viewProduction,ageing:viewAgeing,review:viewReview,
       setup:viewSetup}[S.view])(pane,ctl,v);
   }catch(e){
@@ -1500,7 +1506,13 @@ function sel(opts,value,attrs){const s=el("select",attrs||{});
 
 /* ============================ 1. FORECAST ============================ */
 function viewForecast(pane,ctl){
-  const all=computeAll(), a=alertsSafe();
+  const all=computeAll();
+  const which=rangeOfView(), mine=skusInRange(which);
+  const ids=new Set(mine.map(s=>s.id));
+  const a=alertsSafe().filter(x=>ids.has(x.sku));
+  if(which==="noncore") ctl.append(el("button",{class:"btn",
+    title:"Choose which beers sit in the non-core range",
+    onclick:editRange},"Choose the range"));
   ctl.append(el("span",{class:"hint"},"Horizon"));
   ctl.append(sel([[13,"13 weeks"],[26,"26 weeks"],[52,"52 weeks"]],S.config.horizon,
     {onchange:e=>{S.config.horizon=+e.target.value;S.calcCache=null;saveConfig();render();}}));
@@ -1512,10 +1524,12 @@ function viewForecast(pane,ctl){
 
   const crit=a.filter(x=>x.sev==="crit"), warn=a.filter(x=>x.sev==="warn");
   const t=el("div",{class:"tiles"});
-  t.append(tile("Coldroom SKUs",String(skus().length),skus().filter(s=>s.product.forecast!==false).length+" forecast"));
+  t.append(tile(which==="noncore"?"Non-core SKUs":"Core SKUs",String(mine.length),
+    mine.filter(s=>s.product.forecast!==false).length+" forecast"));
   t.append(tile("Run dry ≤ 4 weeks",String(crit.length),crit.length?crit.slice(0,2).map(x=>x.name).join(", "):"Nothing urgent",crit.length?"alert":"good"));
   t.append(tile("Run dry ≤ 10 weeks",String(warn.length),"Plan packaging now",warn.length?"warn":""));
-  const nextRun=S.runs.filter(r=>r.packDate>=S.config.currentWeek&&r.status!=="cancelled")
+  const nextRun=S.runs.filter(r=>r.packDate>=S.config.currentWeek&&r.status!=="cancelled"
+      &&ids.has(skuId(r.productId,r.pack)))
     .sort((x,y)=>x.packDate<y.packDate?-1:1)[0];
   t.append(tile("Next packaging run",nextRun?fmtD(nextRun.packDate):"—",
     nextRun?(P(nextRun.productId)||{}).name+" "+nextRun.pack:"Nothing scheduled"));
@@ -1528,11 +1542,33 @@ function viewForecast(pane,ctl){
 
   const vis=visibleSkus();
   if(!vis.length) pane.append(el("div",{class:"card"},el("div",{class:"empty"},
-    el("b",{},"No products yet"),"Add products and packs in Setup, then enter a stocktake.")));
+    which==="noncore"
+      ?el("b",{},"Nothing in the non-core range yet")
+      :el("b",{},"No products yet"),
+    which==="noncore"
+      ?el("div",{},"Put the seasonals and one-offs here and they come off the main forecast. ",
+         el("button",{class:"btn pri",style:"margin-top:10px",onclick:editRange},"Choose the range"))
+      :"Add products and packs in Setup, then enter a stocktake.")));
   for(const s of vis){ const c=all[s.id]||compute(s.id); pane.append(skuGrid(s,c)); }
 }
-function visibleSkus(){ return skus().filter(s=>S.packTab==="all"||s.pack===S.packTab)
-  .filter(s=>s.product.forecast!==false||S.open[s.id]); }
+/* ---- core and non-core ----
+   The core range is the beer that is always on; everything else — seasonals,
+   one-offs, the odd collaboration — lives on its own screen so it doesn't
+   crowd the weekly decisions. A product says which it is; anything unmarked is
+   core, so nothing moves until it's put somewhere. */
+const isNonCore=p=>!!p&&p.range==="noncore";
+function rangeOfView(){ return S.view==="noncore"?"noncore":"core"; }
+function skusInRange(which){
+  return skus().filter(s=>isNonCore(s.product)===(which==="noncore"));
+}
+function visibleSkus(){
+  const which=rangeOfView();
+  return skusInRange(which)
+    .filter(s=>S.packTab==="all"||s.pack===S.packTab)
+    /* a stock-only beer is hidden from the main forecast, but showing it is the
+       whole point of the non-core screen */
+    .filter(s=>which==="noncore"||s.product.forecast!==false||S.open[s.id]);
+}
 
 function skuGrid(s,c){
   const wrap=el("div",{class:"gridwrap",id:"sku-"+s.id,"data-open":String(!!S.open[s.id])});
@@ -1773,6 +1809,36 @@ function skuGrid(s,c){
    100 is no change, 150 is half as much again, 50 is half. It only shows on a
    channel actually forecasting off last year, since that is the only thing it
    multiplies. */
+/* tick the beers that belong to the non-core range */
+function editRange(){
+  const list=S.products.slice().sort((a,b)=>(a.sort|0)-(b.sort|0));
+  openDialog("Which beers are non-core?",b=>{
+    b.append(el("div",{class:"note"},
+      "Anything ticked moves to the ",el("b",{},"Non-core range")," screen and off the main forecast. ",
+      "Nothing else changes — stock, history and runs all stay where they are."));
+    const g=el("div",{style:"display:flex;flex-direction:column;gap:4px;max-height:50vh;overflow:auto"});
+    for(const p of list){
+      const packs=(p.packs||[]).map(q=>q.code).join(", ")||"no packs";
+      g.append(el("label",{class:"row",style:"align-items:center;gap:9px;padding:3px 2px"},
+        el("input",{type:"checkbox",id:"rg-"+p.id,checked:isNonCore(p)}),
+        swatch(p.id),
+        el("span",{style:"min-width:200px"},p.name),
+        el("span",{class:"hint"},packs),
+        p.forecast===false?el("span",{class:"chip"},"stock only"):null));
+    }
+    b.append(g);
+  },body=>{
+    let moved=0;
+    for(const p of list){
+      const on=$("#rg-"+p.id,body).checked;
+      if(on===isNonCore(p)) continue;
+      if(on) p.range="noncore"; else delete p.range;
+      persist("products",p); moved++;
+    }
+    S.calcCache=null;
+    flash(moved?(moved+" beer"+(moved===1?"":"s")+" moved"):"Nothing changed");
+  },"Save");
+}
 function growthBox(sku,r){
   if(r.basis!=="prior_year") return null;
   const cur=(planOf(sku).growth||{})[r.loc.id];
@@ -3826,6 +3892,11 @@ function editProduct(p){
       field("Brew → pack",el("input",{type:"number",id:"pb",value:rec.brewToPackDays||21,min:"0"}),"Days"),
       field("Include in forecast",sel([["yes","Yes — full forecast"],["no","No — track stock only"]],
         rec.forecast===false?"no":"yes",{id:"pf"}))));
+    b.append(el("div",{class:"grid2"},
+      field("Range",sel([["core","Core — on the main forecast"],
+                         ["noncore","Non-core — seasonals and one-offs"]],
+        isNonCore(rec)?"noncore":"core",{id:"pr"}),"Which forecast screen it appears on"),
+      el("div",{})));
     b.append(el("div",{class:"row",style:"align-items:center;gap:10px"},
       el("span",{class:"fld",style:"margin:0"},"Brand colour"),
       el("input",{type:"color",class:"swin",id:"pc",value:brandColour(rec.id||"new")}),
@@ -3867,6 +3938,7 @@ function editProduct(p){
     rec.name=name; rec.id=rec.id||slug(name);
     rec.brewToPackDays=num($("#pb",body).value)||21;
     rec.forecast=$("#pf",body).value==="yes";
+    if($("#pr",body).value==="noncore") rec.range="noncore"; else delete rec.range;
     rec.packs=PACKS.filter(c=>$("#pk-"+slug(c),body).checked).map(c=>({code:c,unitLabel:PACK_UNIT[c],
       shelfLifeMonths:num($("#sh-"+slug(c),body).value)||PACK_SHELF[c],
       litres:num($("#lt-"+slug(c),body).value)||LPU[c]||0,
