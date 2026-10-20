@@ -90,6 +90,10 @@ table.mini th{text-align:left;font:600 10px/1.4 var(--sans);letter-spacing:.06em
 table.mini td{padding:4px 6px;border-bottom:1px solid var(--line-soft)}
 table.mini td.num,table.mini th.num{text-align:right;font-family:var(--mono)}
 .fg td.ret{color:var(--warn);font-weight:600}
+/* a figure that is still the plan, not an actual */
+.fg td.plan{color:var(--muted);font-style:italic}
+.fg td.inp.plan input::placeholder{color:var(--muted);opacity:1;font-style:italic}
+.fg td.v.past.plan button{color:var(--muted);font-style:italic}
 /* a stocktake line that disagrees with the ERP and hasn't been explained */
 input.cellinp.owes{background:var(--warn-soft);box-shadow:inset 0 0 0 1px var(--warn)}
 input.cellinp.owes::placeholder{color:var(--warn);opacity:.9}
@@ -351,7 +355,7 @@ dialog footer{padding:12px 16px;border-top:1px solid var(--line-soft);display:fl
 /* Which build this is. It shows at the bottom of the sidebar and on Setup, so
    there is never any doubt about whether a deploy actually landed: if the
    stamp hasn't changed after deploying, the browser is still on the old file. */
-const BUILD="2026-10-19b · plan handover, per-line notes, re-count mode";
+const BUILD="2026-10-20 · this week keeps its plan until the actuals are in";
 /* ============================ helpers ============================ */
 const $ = (s,r)=> (r||document).querySelector(s);
 const el = (t,a,...k)=>{const n=document.createElement(t);
@@ -1085,7 +1089,13 @@ function compute(sku){
 
     if(!tracks){
       const ship=forecastSeries(sku,"out",kOut,weeks,basis,manual,cfg.avgWindow,l.id,growth);
+      /* this week keeps its plan too: what was typed, or what the forecast says
+         for it, until the actual is known */
+      const actNow=at(sku,"out",kOut,cw);
+      const planNow=num(manual[cw])!=null?num(manual[cw])
+        :(forecastSeries(sku,"out",kOut,[cw],basis,manual,cfg.avgWindow,l.id,growth)[0]||0);
       rows.push({loc:l,tracks:false,basis,method:"direct",ship,draw:null,soh:null,manual,growth,
+        planNow,outNow:actNow!=null?actNow:planNow,
         pastOut:past.map(w=>at(sku,"out",kOut,w)),
         avg:avgOf(sku,"out",kOut,cw,cfg.avgWindow)});
       continue;
@@ -1119,6 +1129,17 @@ function compute(sku){
     }
     /* what we ship in week k lands on their shelf `lead` weeks later */
     let soh=openingSOH(sku,l.id);
+    /* This week is still being decided, so it keeps its plan rather than going
+       blank: what actually shipped if that has been entered, otherwise their
+       order plan, a known order, or topping up to target against what they are
+       holding now. The coldroom reads the same figure, so the week it is
+       sitting in adds up on screen. */
+    const actNow=at(sku,"out",kOut,cw);
+    let planNow;
+    if(method==="planned") planNow=num(planned[cw])!=null?num(planned[cw]):0;
+    else if(num(override[cw])!=null) planNow=num(override[cw]);
+    else if(method==="direct") planNow=num(manual[cw])!=null?num(manual[cw]):0;
+    else planNow=soh<target?roundTo(target-soh,mult):0;
     const sohArr=[],shipArr=[];
     for(let k=0;k<weeks.length;k++){
       const arriving = k>=lead ? shipArr[k-lead]
@@ -1142,6 +1163,7 @@ function compute(sku){
     }
     rows.push({loc:l,tracks:true,basis,method,draw,ship:shipArr,soh:sohArr,target,avg:avgDraw,growth,
       planned,override,lastPlanned:method==="planned"?(lastPlanned||null):null,
+      planNow,outNow:actNow!=null?actNow:planNow,
       opening:openingSOH(sku,l.id),
       pastOut:past.map(w=>at(sku,"out",kOut,w)),
       pastRet:past.map(w=>at(sku,"ret",l.id,w)),
@@ -1158,7 +1180,12 @@ function compute(sku){
      week's shipments still sit between the count and the first forecast week.
      Leave them out and every projection runs a week flattering. */
   const inNow=beerInFor(sku,[cw])[0]||0;
-  const outNow=sum(activeLocs().map(l=>at(sku,"out",histLoc(sku,"out",l.id),cw)||0));
+  /* this week's shipments: the actual where it has been entered, the plan
+     where it hasn't — so the coldroom isn't flattered by a week nobody has
+     typed up yet */
+  const outNow=sum(rows.map(r=>r.outNow||0))
+    +sum(activeLocs().filter(l=>!rows.some(r=>r.loc.id===l.id))
+      .map(l=>at(sku,"out",histLoc(sku,"out",l.id),cw)||0));
   /* stock that came back to us this week is back on the floor to sell */
   const backNow=at(sku,"stockIn","returned",cw)||0;
   /* both ends of each week: what's in the coldroom on the Monday, and what's
@@ -1624,15 +1651,21 @@ function skuGrid(s,c){
   const trB=el("tr",{});
   trB.append(el("td",{class:"stick"},el("div",{class:"lbl"},
     el("span",{class:"tag c"},"in"),"Beer in (packaged)")));
-  /* a week that has been packaged can be corrected to what actually came off
-     the line — click the figure and the week's runs open for editing */
+  /* What went into the coldroom that week. An imported figure is the record;
+     where there isn't one the scheduled runs stand in, so a week that is still
+     being packaged shows its plan instead of going blank — click it to put the
+     actual in once the line has finished. */
   (c.pastIn||c.past.map(()=>null)).forEach((v,i)=>{
     const wk=c.past[i], runs=runsInWeek(s.id,wk);
-    if(!runs.length){ trB.append(vcell(v,i)); return; }
-    const td=el("td",{class:"v past"+(runs.some(r=>r.actualUnits!=null)?" edited":"")});
+    const fromRuns=sum(runs.map(runUnits));
+    const shown=v!=null?v:(runs.length?fromRuns:null);
+    if(!runs.length){ trB.append(vcell(shown,i)); return; }
+    const actual=v!=null||runs.some(r=>r.actualUnits!=null);
+    const td=el("td",{class:"v past"+(actual?" edited":" plan")});
     td.append(el("button",{class:"btn sm",style:"padding:1px 5px",
-      title:runs.some(r=>r.actualUnits!=null)?"Actual packaged figure":"Planned — click to enter what was actually packaged",
-      onclick:()=>editRunsForWeek(s.id,wk)},n0(v)));
+      title:actual?"What was packaged that week — click to correct it"
+                  :"Planned for this week — click to enter what actually came off the line",
+      onclick:()=>editRunsForWeek(s.id,wk)},n0(shown)));
     trB.append(td);
   });
   c.beerIn.forEach((v,i)=>{
@@ -1657,14 +1690,20 @@ function skuGrid(s,c){
 
   const trT=el("tr",{});
   trT.append(el("td",{class:"stick"},el("div",{class:"lbl"},el("span",{class:"tag c"},"out"),"Total shipped out")));
-  (c.pastTotalOut||[]).forEach((v,i)=>trT.append(vcell(v,i)));
+  (c.pastTotalOut||[]).forEach((v,i)=>trT.append(
+    i===cwIdx?vcell(c.outNow,i,"plan"):vcell(v,i)));
   c.totalShip.forEach((v,i)=>trT.append(vcell(v,NP+i)));
   tb.append(trT);
 
   /* start of week, plus what's packaged, less what goes out */
+  /* read down the column exactly as it is drawn: start, plus what went in,
+     plus what came back, less what went out */
+  const inAt=i=>{const v=(c.pastIn||[])[i];
+    return v!=null?v:sum(runsInWeek(s.id,c.past[i]).map(runUnits));};
+  const outAt=i=>(i===cwIdx?c.outNow:((c.pastTotalOut||[])[i]||0));
   const endOf=i=>{const s0=(c.pastCold||[])[i];
     if(s0==null) return null;
-    return s0+((c.pastIn||[])[i]||0)+((c.pastBack||[])[i]||0)-((c.pastTotalOut||[])[i]||0);};
+    return s0+inAt(i)+((c.pastBack||[])[i]||0)-outAt(i);};
   const trC=el("tr",{class:"tot"});
   trC.append(el("td",{class:"stick"},el("div",{class:"lbl"},
     el("span",{class:"tag c"},"cold"),"Coldroom — end of week")));
@@ -1792,11 +1831,16 @@ function sohNowCell(sku,r,wk,isNow){
    everything downstream moves with it. Both write the week's actual figure, so
    when a week ends there is nothing to re-enter — only to correct. */
 function nowCell(sku,r,wk,v,isNow){
-  const td=el("td",{class:"v inp"+(isNow?" now":"")+(v!=null?" edited":"")});
+  /* until the actual is typed, this week shows what is planned to go out —
+     greyed, so it reads as a plan, and the coldroom is working off the same
+     figure rather than off nothing */
+  const plan=isNow&&v==null&&r.planNow!=null?r.planNow:null;
+  const td=el("td",{class:"v inp"+(isNow?" now":"")+(v!=null?" edited":plan!=null?" plan":"")});
   td.append(el("input",{type:"text",inputmode:"numeric",value:v==null?"":n0(v),
     "data-k":"out|"+sku+"|"+r.loc.id+"|"+wk,
-    placeholder:"—",
-    title:isNow?("Going out to "+r.loc.name+" this week. Saved as the week's actual.")
+    placeholder:plan!=null?n0(plan):"—",
+    title:isNow?("Going out to "+r.loc.name+" this week"
+          +(plan!=null?" — planned "+n0(plan)+", type the figure to confirm it":". Saved as the week's actual."))
                :("What actually went to "+r.loc.name+" last week"),
     onchange:e=>{setActual(sku,r.loc.id,wk,e.target.value);reflow();}}));
   return td;
