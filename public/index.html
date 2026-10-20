@@ -355,7 +355,7 @@ dialog footer{padding:12px 16px;border-top:1px solid var(--line-soft);display:fl
 /* Which build this is. It shows at the bottom of the sidebar and on Setup, so
    there is never any doubt about whether a deploy actually landed: if the
    stamp hasn't changed after deploying, the browser is still on the old file. */
-const BUILD="2026-10-20 · this week keeps its plan until the actuals are in";
+const BUILD="2026-10-20b · this week keeps its plan; top-up targets editable";
 /* ============================ helpers ============================ */
 const $ = (s,r)=> (r||document).querySelector(s);
 const el = (t,a,...k)=>{const n=document.createElement(t);
@@ -1610,7 +1610,9 @@ function skuGrid(s,c){
       const ms=sel([["target_soh","Top up to target"],["planned","Their order plan"]],r.method,
         {class:"basis",onchange:e=>setMethod(s.id,r.loc.id,e.target.value)});
       l3.append(el("div",{class:"lbl"},el("span",{style:"padding-left:22px"},"Their SOH"),ms,
-        el("span",{class:"hint",title:"Target stock on hand at this distributor"},"tgt "+n0(r.target)),
+        el("button",{class:"btn sm",style:"padding:1px 5px",
+          title:"The stock on hand we top "+r.loc.name+" up to — click to set it for this SKU",
+          onclick:()=>editTarget(s,r)},"tgt "+n0(r.target)),
         r.lastPlanned?el("span",{class:"hint",style:"color:var(--accent-ink)",
           title:"Their order plan runs to "+fmtD(r.lastPlanned)+", then this channel tops up to target"},
           "plan → "+fmtW(r.lastPlanned)):null));
@@ -3506,6 +3508,60 @@ function editChannels(sku){
     persist("plan",pl);
     flash(sku.product.name+" "+sku.pack+" — "+picked.length+" channel"+(picked.length===1?"":"s"));
   },"Save channels");
+}
+
+/* ---- the figure a channel gets topped up to ----
+   Two ways of saying the same thing: weeks of their own drawdown, which moves
+   as they get busier, or a fixed number of units, which doesn't. Weeks is the
+   default and comes from the channel's setting in Setup; either can be set for
+   one SKU at this channel without touching the rest. */
+function editTarget(s,r){
+  const pl=planOf(s.id), loc=r.loc.id;
+  const locWeeks=(L(loc)||{}).targetWeeks||3;
+  const curW=(pl.targetWeeks||{})[loc], curU=(pl.targetUnits||{})[loc];
+  const unit=(PACK_UNIT[s.pack]||"units").toLowerCase();
+  openDialog("Top-up target — "+s.product.name+" "+s.pack+" at "+r.loc.name,b=>{
+    b.append(el("div",{class:"note"},
+      "We top this channel up to ",el("b",{},n0(r.target)+" "+unit),
+      " — they draw about ",el("b",{},n0(r.avg)+" "+unit+" a week"),
+      ", so that is ",el("b",{},n1(r.avg>0?r.target/r.avg:0)+" weeks")," of cover. ",
+      "Leave both boxes empty to follow the channel's own setting of "+n1(locWeeks)+" weeks."));
+    b.append(el("div",{class:"grid2"},
+      field("Weeks of cover",el("input",{type:"number",id:"tw",step:"0.5",min:"0",
+        value:curW!=null?curW:"",placeholder:n1(locWeeks)}),
+        "Moves with their drawdown"),
+      field("Or a fixed figure",el("input",{type:"number",id:"tu",step:"1",min:"0",
+        value:curU!=null&&curU!==""?curU:"",placeholder:"e.g. "+n0(r.target)}),
+        unit.charAt(0).toUpperCase()+unit.slice(1)+" — wins over the weeks")));
+    const out=el("div",{class:"hint"},"");
+    const redraw=()=>{
+      const u=num($("#tu",b).value), w=num($("#tw",b).value);
+      const t=(u!=null&&u>0)?u:Math.round(r.avg*(w!=null?w:locWeeks));
+      out.textContent="That makes the target "+n0(t)+" "+unit
+        +(r.avg>0?" — "+n1(t/r.avg)+" weeks of cover at the moment":"");
+    };
+    $("#tu",b).addEventListener("input",redraw);
+    $("#tw",b).addEventListener("input",redraw);
+    redraw(); b.append(out);
+    b.append(el("label",{class:"row",style:"align-items:center;gap:8px;margin-top:4px"},
+      el("input",{type:"checkbox",id:"tall"}),
+      el("span",{},"Apply to every channel on this SKU that tops up to target")));
+    if(curW!=null||curU!=null) b.append(el("button",{class:"btn",type:"button",style:"align-self:flex-start",
+      onclick:()=>{delete (pl.targetWeeks||{})[loc]; delete (pl.targetUnits||{})[loc];
+        persist("plan",pl);$("#dlg").close();render();
+        flash("Back to the channel's own setting");}},"Clear — follow the channel setting"));
+  },body=>{
+    const u=num($("#tu",body).value), w=num($("#tw",body).value);
+    const all=$("#tall",body).checked;
+    const locs=all?compute(s.id).rows.filter(x=>x.tracks&&x.method==="target_soh").map(x=>x.loc.id):[loc];
+    for(const id of locs){
+      pl.targetUnits=pl.targetUnits||{}; pl.targetWeeks=pl.targetWeeks||{};
+      if(u!=null&&u>0) pl.targetUnits[id]=u; else delete pl.targetUnits[id];
+      if(w!=null) pl.targetWeeks[id]=w; else delete pl.targetWeeks[id];
+    }
+    persist("plan",pl);
+    flash(locs.length>1?("Target set on "+locs.length+" channels"):"Target saved");
+  },"Save target");
 }
 
 /* ---- forecast a new SKU from one that has history ---- */
