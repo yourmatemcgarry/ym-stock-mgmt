@@ -78,6 +78,27 @@ button,input,select,textarea{font:inherit;color:inherit}
 .sync.on i{background:var(--ok)}
 .sync.off i{background:var(--warn)}
 .bld{font:500 10.5px/1.4 var(--mono);color:var(--faint);letter-spacing:.02em}
+/* a SKU's colour, wherever the SKU is named */
+.sw{width:10px;height:10px;border-radius:3px;flex:none;display:inline-block;
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.18);margin-right:6px;vertical-align:-1px}
+input.swin{width:30px;height:24px;padding:0;border:1px solid var(--line);border-radius:5px;background:none}
+.chip .x{border:0;background:none;color:inherit;cursor:pointer;padding:0 0 0 5px;font-size:13px;line-height:1}
+/* compact table inside a dialog */
+table.mini{width:100%;border-collapse:collapse;font-size:12.5px}
+table.mini th{text-align:left;font:600 10px/1.4 var(--sans);letter-spacing:.06em;text-transform:uppercase;
+  color:var(--muted);padding:4px 6px;border-bottom:1px solid var(--line)}
+table.mini td{padding:4px 6px;border-bottom:1px solid var(--line-soft)}
+table.mini td.num,table.mini th.num{text-align:right;font-family:var(--mono)}
+.fg td.ret{color:var(--warn);font-weight:600}
+/* a figure that is still the plan, not an actual */
+.fg td.plan{color:var(--muted);font-style:italic}
+.fg td.inp.plan input::placeholder{color:var(--muted);opacity:1;font-style:italic}
+.fg td.v.past.plan button{color:var(--muted);font-style:italic}
+/* a stocktake line that disagrees with the ERP and hasn't been explained */
+input.cellinp.owes{background:var(--warn-soft);box-shadow:inset 0 0 0 1px var(--warn)}
+input.cellinp.owes::placeholder{color:var(--warn);opacity:.9}
+td.cell.mid{text-align:center}
+input.rc{width:15px;height:15px;accent-color:var(--accent);cursor:pointer}
 
 .main{min-width:0;display:flex;flex-direction:column}
 .top{position:sticky;top:0;z-index:30;background:var(--surface);border-bottom:1px solid var(--line);
@@ -197,7 +218,7 @@ tbody tr:last-child td{border-bottom:0}
 .gridwrap[data-open="true"] .caret{transform:rotate(90deg)}
 .fg{font-size:12.5px}
 .fg th,.fg td{padding:5px 8px;border-bottom:1px solid var(--line-soft);border-right:1px solid var(--line-soft)}
-.fg thead th{background:var(--surface-2);z-index:6}
+.fg thead th{background:var(--surface-2);position:sticky;top:0;z-index:6}
 .fg .stick{position:sticky;left:0;z-index:4;background:var(--surface);min-width:246px;max-width:246px;
   border-right:1px solid var(--line);overflow:hidden;text-overflow:ellipsis}
 .fg thead .stick{z-index:8;background:var(--surface-2)}
@@ -334,7 +355,7 @@ dialog footer{padding:12px 16px;border-top:1px solid var(--line-soft);display:fl
 /* Which build this is. It shows at the bottom of the sidebar and on Setup, so
    there is never any doubt about whether a deploy actually landed: if the
    stamp hasn't changed after deploying, the browser is still on the old file. */
-const BUILD="2026-10-16 · timeline, brew dates, pinned headers";
+const BUILD="2026-10-20 · this week keeps its plan until the actuals are in";
 /* ============================ helpers ============================ */
 const $ = (s,r)=> (r||document).querySelector(s);
 const el = (t,a,...k)=>{const n=document.createElement(t);
@@ -399,6 +420,7 @@ const planOf=s=>{
   const p=S.plan[s]||(S.plan[s]={id:s});
   for(const k of ["basis","method","manual","planned","override","targetUnits","targetWeeks","off","growth"])
     if(!p[k]) p[k]={};
+  if(!Array.isArray(p.returns)) p.returns=[];   /* stock sent back, newest last */
   return p;
 };
 
@@ -489,7 +511,8 @@ function seedBlank(){
 /* ============================ history access ============================ */
 function H(sku){
   let h=S.hist[sku];
-  if(!h){h={id:sku,sku,weeks:[],out:{},soh:{},used:{},stockIn:{}};S.hist[sku]=h;}
+  if(!h){h={id:sku,sku,weeks:[],out:{},soh:{},used:{},ret:{},stockIn:{}};S.hist[sku]=h;}
+  if(!h.ret) h.ret={};            /* units sent back to us, by channel */
   if(!h._ix){h._ix={};(h.weeks||[]).forEach((w,i)=>h._ix[w]=i);}
   return h;
 }
@@ -510,7 +533,7 @@ function avgOf(sku,field,loc,w,n){const t=tail(sku,field,loc,w,n);return t.lengt
 function histInsertWeek(h,wk){
   let i=h.weeks.findIndex(w=>w>wk); if(i<0) i=h.weeks.length;
   h.weeks.splice(i,0,wk);
-  for(const f of ["out","soh","used"])
+  for(const f of ["out","soh","used","ret"])
     for(const k of Object.keys(h[f]||{})) h[f][k].splice(i,0,null);
   for(const k of Object.keys(h.stockIn||{})) h.stockIn[k].splice(i,0,null);
   h._ix=null; H(h.id);
@@ -537,8 +560,52 @@ function deriveUsed(sku,locId,wk){
   if(now==null||prev==null) return false;
   const lead=Math.max(0,l.leadTimeWeeks||0);
   const arriving=at(sku,"out",kO,wkAdd(wk,-lead))||0;
-  histSet(sku,"used",locId,wk,Math.round((prev+arriving-now)*100)/100);
+  /* stock they sent back left their warehouse without being sold, so it is not
+     drawdown — count it out or every return looks like a good week */
+  const sentBack=at(sku,"ret",histLoc(sku,"ret",locId),wk)||0;
+  histSet(sku,"used",locId,wk,Math.round((prev+arriving-sentBack-now)*100)/100);
   return true;
+}
+/* ---- stock sent back ----
+   A return is one event: a quantity, the channel it came back from, and where
+   it ended up. The log on the plan is what's recorded; the weekly `ret` series
+   and the coldroom's "returned in" row are worked out from it, so correcting a
+   return corrects the maths everywhere. */
+const RET_DEST={coldroom:"Back to the coldroom",quarantine:"Quarantined",writeoff:"Written off"};
+function returnsOf(sku){ return planOf(sku).returns||[]; }
+function rebuildReturns(sku,save){
+  const h=H(sku), pl=planOf(sku);
+  const weeks=new Set();
+  for(const k of Object.keys(h.ret||{})) for(let i=0;i<h.weeks.length;i++)
+    if(h.ret[k][i]!=null) weeks.add(h.weeks[i]);
+  h.ret={};
+  if(h.stockIn&&h.stockIn.returned) delete h.stockIn.returned;
+  const byLoc={}, back={};
+  for(const r of pl.returns||[]){
+    const q=num(r.qty)||0; if(!q) continue;
+    byLoc[r.loc+"|"+r.wk]=(byLoc[r.loc+"|"+r.wk]||0)+q;
+    weeks.add(r.wk);
+    if(r.dest==="coldroom") back[r.wk]=(back[r.wk]||0)+q;
+  }
+  for(const k of Object.keys(byLoc)){
+    const [loc,wk]=k.split("|");
+    histSet(sku,"ret",loc,wk,Math.round(byLoc[k]*100)/100);
+  }
+  for(const wk of Object.keys(back)) histSet(sku,"stockIn","returned",wk,Math.round(back[wk]*100)/100);
+  /* a return changes what last week's drawdown must have been */
+  for(const wk of weeks) for(const l of activeLocs()) deriveUsed(sku,l.id,wk);
+  S.calcCache=null;
+  if(save){ persist("plan",pl); persist("history",stripIx(h)); }
+}
+function addReturn(sku,rec){
+  const pl=planOf(sku);
+  pl.returns.push(Object.assign({id:uid("r")},rec));
+  rebuildReturns(sku,true);
+}
+function dropReturn(sku,id){
+  const pl=planOf(sku);
+  pl.returns=pl.returns.filter(r=>r.id!==id);
+  rebuildReturns(sku,true);
 }
 /* Stocktakes are the stock-on-hand record; fold them into the history so the
    forecast's own series stay current without anyone retyping them. */
@@ -623,6 +690,7 @@ function openingSOH(sku,locId){
 /* history is keyed by location NAME (as imported); accept either */
 function histLoc(sku,field,locId){
   const h=H(sku),l=L(locId);
+  if(field==="ret") return locId;   /* nothing imported under this one: always the id */
   if(h[field]&&h[field][locId])return locId;
   if(l&&h[field]&&h[field][l.name])return l.name;
   return l?l.name:locId;
@@ -987,13 +1055,16 @@ function skuHasOwnHistory(sku){
     tail(sku,f,histLoc(sku,f,l.id),cw,12).some(v=>v>0)));
 }
 
+/* What a run put in the coldroom: once it's packaged, the figure that counts is
+   what actually came off the line, not what was planned. */
+function runUnits(r){ const a=num(r.actualUnits); return a!=null?a:(num(r.units)||0); }
 function beerInFor(sku,weeks){
   const map={};
   for(const r of S.runs){
     if(skuId(r.productId,r.pack)!==sku) continue;
     if(r.status==="cancelled") continue;
     const w=monday(r.packDate);
-    map[w]=(map[w]||0)+(num(r.units)||0);
+    map[w]=(map[w]||0)+runUnits(r);
   }
   return weeks.map(w=>map[w]||0);
 }
@@ -1018,7 +1089,13 @@ function compute(sku){
 
     if(!tracks){
       const ship=forecastSeries(sku,"out",kOut,weeks,basis,manual,cfg.avgWindow,l.id,growth);
+      /* this week keeps its plan too: what was typed, or what the forecast says
+         for it, until the actual is known */
+      const actNow=at(sku,"out",kOut,cw);
+      const planNow=num(manual[cw])!=null?num(manual[cw])
+        :(forecastSeries(sku,"out",kOut,[cw],basis,manual,cfg.avgWindow,l.id,growth)[0]||0);
       rows.push({loc:l,tracks:false,basis,method:"direct",ship,draw:null,soh:null,manual,growth,
+        planNow,outNow:actNow!=null?actNow:planNow,
         pastOut:past.map(w=>at(sku,"out",kOut,w)),
         avg:avgOf(sku,"out",kOut,cw,cfg.avgWindow)});
       continue;
@@ -1039,8 +1116,30 @@ function compute(sku){
     const target=Math.max(0,(tU!=null&&tU!==""&&num(tU)>0)?num(tU):Math.round(avgDraw*tW));
     const lead=Math.max(0,l.leadTimeWeeks||0);
     const mult=l.orderMultiple||1;
+    /* An order plan only runs as far as the chain has actually told us —
+       their horizon, 13 weeks by default, set per channel in Setup. Figures
+       beyond that are guesswork, so the channel goes back to topping up to
+       target there. A gap inside the plan is still a deliberate zero; a run of
+       zeros on the end is the plan having finished, not an order for none. */
+    let lastPlanned="";
+    for(const w of Object.keys(planned)) if(num(planned[w])>0&&w>lastPlanned) lastPlanned=w;
+    if(method==="planned"){
+      const horizonEnd=wkAdd(cw,Math.max(1,l.plannedHorizon||13));
+      if(!lastPlanned||lastPlanned>horizonEnd) lastPlanned=horizonEnd;
+    }
     /* what we ship in week k lands on their shelf `lead` weeks later */
     let soh=openingSOH(sku,l.id);
+    /* This week is still being decided, so it keeps its plan rather than going
+       blank: what actually shipped if that has been entered, otherwise their
+       order plan, a known order, or topping up to target against what they are
+       holding now. The coldroom reads the same figure, so the week it is
+       sitting in adds up on screen. */
+    const actNow=at(sku,"out",kOut,cw);
+    let planNow;
+    if(method==="planned") planNow=num(planned[cw])!=null?num(planned[cw]):0;
+    else if(num(override[cw])!=null) planNow=num(override[cw]);
+    else if(method==="direct") planNow=num(manual[cw])!=null?num(manual[cw]):0;
+    else planNow=soh<target?roundTo(target-soh,mult):0;
     const sohArr=[],shipArr=[];
     for(let k=0;k<weeks.length;k++){
       const arriving = k>=lead ? shipArr[k-lead]
@@ -1048,7 +1147,8 @@ function compute(sku){
       soh = soh + arriving - draw[k];
       let ship=0;
       const ov=num(override[weeks[k]]);
-      if(method==="planned"){ ship=num(planned[weeks[k]])||0; }
+      const onPlan=method==="planned"&&weeks[k]<=lastPlanned;
+      if(onPlan){ ship=num(planned[weeks[k]])||0; }   /* their order plan stands, zeros included */
       else if(ov!=null){ ship=ov; }          /* we already know what's going */
       else {
         /* Top up to target against what they are holding now: target less their
@@ -1062,9 +1162,11 @@ function compute(sku){
       sohArr.push(soh); shipArr.push(ship);
     }
     rows.push({loc:l,tracks:true,basis,method,draw,ship:shipArr,soh:sohArr,target,avg:avgDraw,growth,
-      planned,override,
+      planned,override,lastPlanned:method==="planned"?(lastPlanned||null):null,
+      planNow,outNow:actNow!=null?actNow:planNow,
       opening:openingSOH(sku,l.id),
       pastOut:past.map(w=>at(sku,"out",kOut,w)),
+      pastRet:past.map(w=>at(sku,"ret",l.id,w)),
       pastDraw:past.map(w=>at(sku,drawField,drawKey,w)),
       /* this week's cell falls back to the carried-forward estimate, so the row
          doesn't go blank on a channel nobody counts */
@@ -1078,11 +1180,18 @@ function compute(sku){
      week's shipments still sit between the count and the first forecast week.
      Leave them out and every projection runs a week flattering. */
   const inNow=beerInFor(sku,[cw])[0]||0;
-  const outNow=sum(activeLocs().map(l=>at(sku,"out",histLoc(sku,"out",l.id),cw)||0));
+  /* this week's shipments: the actual where it has been entered, the plan
+     where it hasn't — so the coldroom isn't flattered by a week nobody has
+     typed up yet */
+  const outNow=sum(rows.map(r=>r.outNow||0))
+    +sum(activeLocs().filter(l=>!rows.some(r=>r.loc.id===l.id))
+      .map(l=>at(sku,"out",histLoc(sku,"out",l.id),cw)||0));
+  /* stock that came back to us this week is back on the floor to sell */
+  const backNow=at(sku,"stockIn","returned",cw)||0;
   /* both ends of each week: what's in the coldroom on the Monday, and what's
      left after that week's packaging and shipments. The pair is what says
      whether a week can be got through, not just which week ends short. */
-  const cold=[], coldStart=[]; let c=openCold+inNow-outNow;
+  const cold=[], coldStart=[]; let c=openCold+inNow+backNow-outNow;
   for(let k=0;k<weeks.length;k++){ coldStart.push(c); c=c+beerIn[k]-totalShip[k]; cold.push(c); }
   const wkAvg=sum(totalShip)/Math.max(1,totalShip.length);
   const cover=cold.map(v=>wkAvg>0?v/wkAvg:null);
@@ -1092,8 +1201,10 @@ function compute(sku){
   const lead=(p&&p.brewToPackDays)||21;
   const brewBy=stockoutWeek?iso(new Date(D(stockoutWeek)-lead*DAY)):null;
   const surplusTarget=(p&&p.surplusTarget&&p.surplusTarget[sku.split("__").slice(1).join("__")])||null;
-  return {sku,weeks,past,rows,totalShip,beerIn,cold,coldStart,cover,openCold,inNow,outNow,
+  return {sku,weeks,past,rows,totalShip,beerIn,cold,coldStart,cover,openCold,inNow,outNow,backNow,
     stockoutWeek,brewBy,wkAvg,surplusTarget,
+    pastBack:past.map(w=>at(sku,"stockIn","returned",w)),
+    pastRetTotal:past.map(w=>{const t=sum(activeLocs().map(l=>at(sku,"ret",l.id,w)||0));return t||null;}),
     pastTotalOut:past.map(w=>sum(activeLocs().map(l=>at(sku,"out",histLoc(sku,"out",l.id),w)||0))),
     pastCold:past.map(w=>at(sku,"soh","coldroom",w)),
     pastIn:past.map(w=>at(sku,"stockIn","packaged",w))};
@@ -1297,6 +1408,26 @@ function seedBanner(){
   bar.append(body); return bar;
 }
 
+/* ---- a colour per SKU ----
+   Set in Setup, used anywhere a SKU is named. Until one is chosen the id picks
+   a stable colour of its own, so nothing is ever grey-on-grey by accident. */
+const PACK_TINT={"Can":0,"10 Pack":28,"Keg":180,"30L Keg":205};
+function skuColour(skuId,pack){
+  const p=P((skuId||"").split("__")[0]);
+  const code=pack||(skus().find(x=>x.id===skuId)||{}).pack;
+  const set=p&&p.colour&&code&&p.colour[code];
+  if(set) return set;
+  let n=0; for(const ch of String(skuId)) n=(n*31+ch.charCodeAt(0))&0xffff;
+  const h=(n%360+(PACK_TINT[code]||0))%360;
+  const f=v=>Math.round(v).toString(16).padStart(2,"0");
+  /* a fixed saturation and lightness keeps the whole set readable together */
+  const a=0.52, l=0.56, k=n=>(n+h/30)%12, m=(n)=>l-a*Math.min(l,1-l)*Math.max(-1,Math.min(k(n)-3,Math.min(9-k(n),1)));
+  return "#"+f(m(0)*255)+f(m(8)*255)+f(m(4)*255);
+}
+function swatch(skuId,pack){
+  return el("span",{class:"sw",style:"background:"+skuColour(skuId,pack),
+    title:"SKU colour — set it in Setup"});
+}
 function skuLabel(id){
   const s=skus().find(x=>x.id===id);
   if(s) return s.product.name+" "+s.pack;
@@ -1370,6 +1501,7 @@ function skuGrid(s,c){
   const sev=c.stockoutWeek?(wkDiff(S.config.currentWeek,c.stockoutWeek)<=4?"crit":"warn"):"ok";
   const head=el("header",{onclick:()=>{S.open[s.id]=!S.open[s.id];render();}},
     el("span",{html:'<svg class="caret" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>'}).firstChild,
+    swatch(s.id),
     el("h3",{},s.product.name,el("span",{},s.pack)),
     el("span",{class:"chip "+(sev==="crit"?"crit":sev==="warn"?"warn":"ok")},
       c.stockoutWeek?("Runs out "+fmtD(c.stockoutWeek)):"Covered "+S.config.horizon+" wks"),
@@ -1389,6 +1521,11 @@ function skuGrid(s,c){
         onclick:ev=>{ev.stopPropagation();editGrowth(s);}},
         set.length?("vs last yr "+(set.length===1?n0(set[0].growth)+"%"
           :set.length+" set")):"vs last yr");})(),
+    (()=>{const n=returnsOf(s.id).length;
+      return el("button",{class:"btn sm",style:"margin-left:6px",
+        title:"Record stock sent back from a distributor, and where it ended up",
+        onclick:ev=>{ev.stopPropagation();editReturns(s,null);}},
+        n?(n+" return"+(n===1?"":"s")):"Returns");})(),
     (()=>{if(!typedEntries(s.id,null).length) return null;
       const n=typedCount(s.id);
       return el("button",{class:"btn sm",style:"margin-left:6px",
@@ -1414,7 +1551,10 @@ function skuGrid(s,c){
     return wrap;
   }
   const axis=[...c.past,...c.weeks], cwIdx=c.past.length-1;
-  const scroll=el("div",{class:"scroll"}), t=el("table",{class:"fg"});
+  /* "tall" bounds the height so the week row has something to stick to: a
+     short SKU is unaffected, a long one scrolls inside its own card with its
+     dates and channel names staying put */
+  const scroll=el("div",{class:"scroll tall"}), t=el("table",{class:"fg"});
   const thead=el("thead"), hr=el("tr",{});
   hr.append(el("th",{class:"stick"},"Week commencing"));
   axis.forEach((w,i)=>{const th=el("th",{class:"wkh"+(i===cwIdx?" now":"")},
@@ -1440,7 +1580,9 @@ function skuGrid(s,c){
       labrow.append(sel(Object.entries(BASES).filter(([k])=>k!=="planned"),r.basis,
         {class:"basis",title:"How this channel's demand is forecast",
          onchange:e=>setBasis(s.id,r.loc.id,e.target.value)}));
-      labrow.append(growthBox(s.id,r));
+      /* only channels forecasting off last year get the percentage box —
+         append() would print a bare "null" for the rest */
+      const gb=growthBox(s.id,r); if(gb) labrow.append(gb);
     }
     lab.append(labrow);
     lab.title=r.loc.name+" — "+LOCTYPE[r.loc.type];
@@ -1468,7 +1610,10 @@ function skuGrid(s,c){
       const ms=sel([["target_soh","Top up to target"],["planned","Their order plan"]],r.method,
         {class:"basis",onchange:e=>setMethod(s.id,r.loc.id,e.target.value)});
       l3.append(el("div",{class:"lbl"},el("span",{style:"padding-left:22px"},"Their SOH"),ms,
-        el("span",{class:"hint",title:"Target stock on hand at this distributor"},"tgt "+n0(r.target))));
+        el("span",{class:"hint",title:"Target stock on hand at this distributor"},"tgt "+n0(r.target)),
+        r.lastPlanned?el("span",{class:"hint",style:"color:var(--accent-ink)",
+          title:"Their order plan runs to "+fmtD(r.lastPlanned)+", then this channel tops up to target"},
+          "plan → "+fmtW(r.lastPlanned)):null));
       tr3.append(l3);
       (r.pastSoh||[]).forEach((v,i)=>tr3.append(
         i>=cwIdx-1&&!countedAt(r.loc.id,c.past[i])
@@ -1476,6 +1621,18 @@ function skuGrid(s,c){
       r.soh.forEach((v,i)=>{const low=r.target>0&&v<r.target*0.4;
         tr3.append(vcell(v,NP+i,v<0?"neg":low?"low":""));});
       tb.append(tr3);
+    }
+    /* stock sent back: only drawn where there is some, so the grid doesn't
+       grow a row of dots for every channel that has never returned anything */
+    if((r.pastRet||[]).some(v=>v!=null&&v!==0)){
+      const tr4=el("tr",{class:"r-ret"});
+      tr4.append(el("td",{class:"stick"},el("div",{class:"lbl"},
+        el("span",{style:"padding-left:22px;color:var(--warn)"},"Returned to us"),
+        el("button",{class:"btn sm",style:"padding:0 5px",title:"Returns from "+r.loc.name,
+          onclick:()=>editReturns(s,r.loc.id)},"edit"))));
+      (r.pastRet||[]).forEach((v,i)=>tr4.append(vcell(v,i,v?"ret":"")));
+      c.weeks.forEach((w,i)=>tr4.append(vcell(null,NP+i)));
+      tb.append(tr4);
     }
   }
   // ---- coldroom block ----
@@ -1494,7 +1651,23 @@ function skuGrid(s,c){
   const trB=el("tr",{});
   trB.append(el("td",{class:"stick"},el("div",{class:"lbl"},
     el("span",{class:"tag c"},"in"),"Beer in (packaged)")));
-  (c.pastIn||c.past.map(()=>null)).forEach((v,i)=>trB.append(vcell(v,i)));
+  /* What went into the coldroom that week. An imported figure is the record;
+     where there isn't one the scheduled runs stand in, so a week that is still
+     being packaged shows its plan instead of going blank — click it to put the
+     actual in once the line has finished. */
+  (c.pastIn||c.past.map(()=>null)).forEach((v,i)=>{
+    const wk=c.past[i], runs=runsInWeek(s.id,wk);
+    const fromRuns=sum(runs.map(runUnits));
+    const shown=v!=null?v:(runs.length?fromRuns:null);
+    if(!runs.length){ trB.append(vcell(shown,i)); return; }
+    const actual=v!=null||runs.some(r=>r.actualUnits!=null);
+    const td=el("td",{class:"v past"+(actual?" edited":" plan")});
+    td.append(el("button",{class:"btn sm",style:"padding:1px 5px",
+      title:actual?"What was packaged that week — click to correct it"
+                  :"Planned for this week — click to enter what actually came off the line",
+      onclick:()=>editRunsForWeek(s.id,wk)},n0(shown)));
+    trB.append(td);
+  });
   c.beerIn.forEach((v,i)=>{
     const td=el("td",{class:"v"+(v>0?"":" past")});
     if(v>0){td.append(el("button",{class:"btn sm",style:"padding:1px 5px",
@@ -1505,16 +1678,32 @@ function skuGrid(s,c){
   });
   tb.append(trB);
 
+  /* only worth a row when something has actually come back */
+  if((c.pastBack||[]).some(v=>v!=null&&v!==0)){
+    const trR=el("tr",{});
+    trR.append(el("td",{class:"stick"},el("div",{class:"lbl"},
+      el("span",{class:"tag c"},"back"),"Returned in (sellable)")));
+    (c.pastBack||[]).forEach((v,i)=>trR.append(vcell(v,i,v?"ret":"")));
+    c.weeks.forEach((w,i)=>trR.append(vcell(null,NP+i)));
+    tb.append(trR);
+  }
+
   const trT=el("tr",{});
   trT.append(el("td",{class:"stick"},el("div",{class:"lbl"},el("span",{class:"tag c"},"out"),"Total shipped out")));
-  (c.pastTotalOut||[]).forEach((v,i)=>trT.append(vcell(v,i)));
+  (c.pastTotalOut||[]).forEach((v,i)=>trT.append(
+    i===cwIdx?vcell(c.outNow,i,"plan"):vcell(v,i)));
   c.totalShip.forEach((v,i)=>trT.append(vcell(v,NP+i)));
   tb.append(trT);
 
   /* start of week, plus what's packaged, less what goes out */
+  /* read down the column exactly as it is drawn: start, plus what went in,
+     plus what came back, less what went out */
+  const inAt=i=>{const v=(c.pastIn||[])[i];
+    return v!=null?v:sum(runsInWeek(s.id,c.past[i]).map(runUnits));};
+  const outAt=i=>(i===cwIdx?c.outNow:((c.pastTotalOut||[])[i]||0));
   const endOf=i=>{const s0=(c.pastCold||[])[i];
     if(s0==null) return null;
-    return s0+((c.pastIn||[])[i]||0)-((c.pastTotalOut||[])[i]||0);};
+    return s0+inAt(i)+((c.pastBack||[])[i]||0)-outAt(i);};
   const trC=el("tr",{class:"tot"});
   trC.append(el("td",{class:"stick"},el("div",{class:"lbl"},
     el("span",{class:"tag c"},"cold"),"Coldroom — end of week")));
@@ -1642,11 +1831,16 @@ function sohNowCell(sku,r,wk,isNow){
    everything downstream moves with it. Both write the week's actual figure, so
    when a week ends there is nothing to re-enter — only to correct. */
 function nowCell(sku,r,wk,v,isNow){
-  const td=el("td",{class:"v inp"+(isNow?" now":"")+(v!=null?" edited":"")});
+  /* until the actual is typed, this week shows what is planned to go out —
+     greyed, so it reads as a plan, and the coldroom is working off the same
+     figure rather than off nothing */
+  const plan=isNow&&v==null&&r.planNow!=null?r.planNow:null;
+  const td=el("td",{class:"v inp"+(isNow?" now":"")+(v!=null?" edited":plan!=null?" plan":"")});
   td.append(el("input",{type:"text",inputmode:"numeric",value:v==null?"":n0(v),
     "data-k":"out|"+sku+"|"+r.loc.id+"|"+wk,
-    placeholder:"—",
-    title:isNow?("Going out to "+r.loc.name+" this week. Saved as the week's actual.")
+    placeholder:plan!=null?n0(plan):"—",
+    title:isNow?("Going out to "+r.loc.name+" this week"
+          +(plan!=null?" — planned "+n0(plan)+", type the figure to confirm it":". Saved as the week's actual."))
                :("What actually went to "+r.loc.name+" last week"),
     onchange:e=>{setActual(sku,r.loc.id,wk,e.target.value);reflow();}}));
   return td;
@@ -1665,11 +1859,14 @@ function shipCell(sku,r,wk,computed){
   const inp=el("input",{type:"text",inputmode:"numeric",value:set?n0(cur):"",
     "data-k":"ship|"+sku+"|"+r.loc.id+"|"+wk,
     placeholder:n0(computed)||"0",
-    title:r.method==="target_soh"
-      ?(set?"Known order — clear this to go back to topping up to target"
-          :"Topping up to "+n0(r.target)+". Type a figure if you already know what's going.")
-      :r.method==="planned"?"What they've told us they're ordering"
-                           :"What we plan to send. Type a figure to fix it.",
+    title:r.method==="planned"
+      ?(r.lastPlanned&&wk>r.lastPlanned
+          ?"Their order plan ends "+fmtD(r.lastPlanned)+" — topping up to "+n0(r.target)+" from here. Type a figure to extend the plan."
+          :"What they've told us they're ordering")
+      :r.method==="target_soh"
+        ?(set?"Known order — clear this to go back to topping up to target"
+            :"Topping up to "+n0(r.target)+". Type a figure if you already know what's going.")
+        :"What we plan to send. Type a figure to fix it.",
     onchange:e=>setShip(sku,r,wk,e.target.value)});
   td.append(inp); return td;
 }
@@ -1817,6 +2014,12 @@ function viewStocktake(pane,ctl){
     }},"Recalculate from stocktakes"));
   if(st) ctl.append(el("button",{class:"btn",title:"Delete this count and the stock on hand it wrote",
     onclick:()=>deleteStocktake(st)},"Delete"));
+  if(st&&recountCount(st)) ctl.append(el("button",
+    {class:"btn"+(stRecountOnly?" pri":""),
+     title:"Show only the lines that disagree with the ERP or are flagged to count again",
+     onclick:()=>{stRecountOnly=!stRecountOnly;render();}},
+    stRecountOnly?("Showing "+recountCount(st)+" to re-count — show all")
+                 :("Re-count ("+recountCount(st)+")")));
   ctl.append(el("button",{class:"btn pri",onclick:newStocktake},"New stocktake"));
   if(!st){
     pane.append(el("div",{class:"card"},el("div",{class:"empty"},el("b",{},"No stocktakes yet"),
@@ -1829,8 +2032,11 @@ function viewStocktake(pane,ctl){
   const wkTile=tile("Week","w/c "+fmtWY(st.weekStart),"");
   wkTile.lastChild.id="stProgress"; wkTile.lastChild.textContent=stProgressText(st);
   t.append(wkTile);
+  const nDiff=recountCount(st), nWhy=unexplained(st);
+  if(nDiff) t.append(tile("Against the ERP",String(nDiff),
+    nWhy?(nWhy+" still need a reason"):"all explained",nWhy?"warn":"ok"));
   const locOrder=Object.keys(byLoc).sort((a,b)=>((L(a)||{}).sort|0)-((L(b)||{}).sort|0));
-  for(const lid of locOrder.slice(0,5)){
+  for(const lid of locOrder.slice(0,nDiff?4:5)){
     const rows=byLoc[lid],ctns=sum(rows.filter(r=>r.pack==="Can"||r.pack==="10 Pack").map(r=>r.qty)),
       kegs=sum(rows.filter(r=>r.pack==="Keg").map(r=>r.qty)),k30=sum(rows.filter(r=>r.pack==="30L Keg").map(r=>r.qty));
     t.append(tile((L(lid)||{name:lid}).name,n0(ctns)+" ctn",n0(kegs)+" × 50L · "+n0(k30)+" × 30L"));
@@ -1869,12 +2075,18 @@ function viewStocktake(pane,ctl){
       el("span",{style:"flex:1"}),
       el("span",{class:"chip"},n0(sum(rows.map(r=>r.qty)))+" counted"),
       el("button",{class:"btn sm",onclick:()=>editEntry(st,{locationId:lid})},"Add line")));
-    const w=el("div",{class:"scroll"}), tb=el("table");
+    const w=el("div",{class:"scroll tall"}), tb=el("table");
     tb.append(el("thead",{},el("tr",{},el("th",{},"Product"),el("th",{},"Pack"),el("th",{},"Batch"),
-      el("th",{class:"num"},"Count"),el("th",{},"Best before"),el("th",{},"Send by"),
+      el("th",{},"Where"),
+      el("th",{class:"num"},"Last week"),
+      el("th",{class:"num"},"Count"),
+      el("th",{class:"num"},"ERP"),el("th",{class:"num"},"Diff"),
+      el("th",{},"Note"),el("th",{title:"Flag this line to be counted again"},"Re-count"),
+      el("th",{},"Best before"),el("th",{},"Send by"),
       el("th",{class:"num"},"Days left"),el("th",{},""))));
     const body=el("tbody");
     for(const e of rows){
+      if(stRecountOnly&&!needsRecount(e)) continue;
       const sm=shelfMonths(e.productId,e.pack);
       const sb=e.bestBefore?iso(new Date(D(e.bestBefore)-Math.round(sm/2*30.44)*DAY)):null;
       const d=sb?dDiff(S.config.currentWeek,sb):null;
@@ -1889,12 +2101,43 @@ function viewStocktake(pane,ctl){
         onchange:ev=>{e.batch=ev.target.value.trim();stSave(st);}});
       const bb=el("input",{class:"cellinp mono",type:"date",value:e.bestBefore||"",
         onchange:ev=>{e.bestBefore=ev.target.value||null;stSave(st);render();}});
-      body.append(el("tr",{class:"stripe "+(d==null?"":d<=0?"crit":d<=28?"warn":""),
+      /* where in the building this lot sits */
+      const ar=areaCell(st,e);
+      /* what the ERP says it holds, against what was counted */
+      const erp=el("input",{class:"cellinp num",type:"text",inputmode:"decimal",
+        value:e.erp!=null?n0(e.erp):"",placeholder:"—",
+        title:"What the ERP says for this batch",
+        onfocus:ev=>ev.target.select(), onkeydown:ev=>stepCell(ev),
+        onchange:ev=>{const v=num(ev.target.value); if(v==null) delete e.erp; else e.erp=v;
+          stSave(st);reflow();}});
+      const diff=(e.qty!=null&&e.erp!=null)?Math.round((e.qty-e.erp)*100)/100:null;
+      const prev=lastWeekQty(st,e);
+      /* a line that disagrees with the ERP needs a reason before it's settled */
+      const owes=!!diff&&!(e.note||"").trim();
+      const note=el("input",{class:"cellinp"+(owes?" owes":""),type:"text",
+        value:e.note||"",
+        placeholder:owes?"why the difference?":"note",
+        title:owes?"This line disagrees with the ERP — say why before it's signed off"
+                  :"Anything worth remembering about this line",
+        onkeydown:ev=>stepCell(ev),
+        onchange:ev=>{const v=ev.target.value.trim();
+          if(v) e.note=v; else delete e.note; stSave(st); reflow();}});
+      const rc=el("input",{type:"checkbox",class:"rc",checked:!!e.recount,
+        title:"Count this one again",
+        onchange:ev=>{if(ev.target.checked) e.recount=true; else delete e.recount;
+          stSave(st); reflow();}});
+      body.append(el("tr",{class:"stripe "+(e.recount?"warn ":"")+(d==null?"":d<=0?"crit":d<=28?"warn":""),
           "data-zero":String(e.qty==null)},
-        el("td",{},(P(e.productId)||{name:e.productId}).name),
+        el("td",{},swatch(skuId(e.productId,e.pack),e.pack),(P(e.productId)||{name:e.productId}).name),
         el("td",{class:"dim"},e.pack),
         el("td",{class:"cell"},bat),
+        el("td",{class:"cell"},ar),
+        el("td",{class:"num dim",title:"Counted in the previous stocktake"},prev==null?"—":n0(prev)),
         el("td",{class:"cell"},qty),
+        el("td",{class:"cell"},erp),
+        el("td",{class:"num"+(diff?" neg":"")},diff==null?"—":(diff>0?"+":"")+n0(diff)),
+        el("td",{class:"cell"},note),
+        el("td",{class:"cell mid"},rc),
         el("td",{class:"cell"},bb),
         el("td",{class:"mono dim"},fmtD(sb)),
         el("td",{class:"num"},d==null?"—":String(d)),
@@ -1902,8 +2145,53 @@ function viewStocktake(pane,ctl){
           onclick:()=>{if(!confirm("Remove this line from the stocktake?"))return;
             st.entries=st.entries.filter(x=>x.id!==e.id);stSave(st);render();}},"×"))));
     }
+    if(!body.children.length) continue;      /* nothing here to re-count */
     tb.append(body); w.append(tb); c.append(w); pane.append(c);
   }
+}
+/* ---- lines that aren't settled ----
+   A line disagreeing with the ERP, or flagged to be counted again. Re-count
+   mode shows nothing else, so a recount is a short list rather than a hunt
+   back through the whole sheet. */
+let stRecountOnly=false;
+function stDiff(e){
+  return (e.qty!=null&&e.erp!=null)?Math.round((e.qty-e.erp)*100)/100:null;
+}
+function needsRecount(e){ return !!e.recount||!!stDiff(e); }
+function recountCount(st){ return (st.entries||[]).filter(needsRecount).length; }
+function unexplained(st){
+  return (st.entries||[]).filter(e=>stDiff(e)&&!(e.note||"").trim()).length;
+}
+/* ---- what this line held last time ----
+   Matched on the batch where there is one, since that is the same physical
+   pallet; otherwise on the SKU at that location, totalled, which is the only
+   honest comparison when the batches have turned over. */
+function prevStocktake(st){
+  const earlier=S.stock.filter(x=>x.weekStart<st.weekStart)
+    .sort((a,b)=>a.weekStart<b.weekStart?1:-1);
+  return earlier[0]||null;
+}
+function lastWeekQty(st,e){
+  const p=prevStocktake(st); if(!p) return null;
+  const same=(p.entries||[]).filter(x=>x.locationId===e.locationId&&x.productId===e.productId&&x.pack===e.pack);
+  if(!same.length) return null;
+  if(e.batch){
+    const hit=same.filter(x=>(x.batch||"")===e.batch);
+    if(hit.length) return sum(hit.map(x=>x.qty||0));
+    return null;                       /* a new batch: nothing to compare it to */
+  }
+  return sum(same.map(x=>x.qty||0));
+}
+/* ---- where in the building ----
+   The list of areas is kept in Setup; a line can also be left blank. */
+function areaList(){ return (S.config.areas||[]).filter(Boolean); }
+function areaCell(st,e){
+  const opts=[["","—"],...areaList().map(a=>[a,a])];
+  const cur=e.area||"";
+  if(cur&&!areaList().includes(cur)) opts.push([cur,cur]);
+  return sel(opts,cur,{class:"cellinp",
+    title:"Where this lot is — the list is set up under Setup",
+    onchange:ev=>{const v=ev.target.value; if(!v) delete e.area; else e.area=v; stSave(st);}});
 }
 /* inline grid entry: debounce writes so typing down a column is one save, not fifty */
 let stTimer=null, stPending=null;
@@ -2223,7 +2511,7 @@ function viewProduction(pane,ctl){
     "is set per product in Setup (default 21 days). Change it there and every brew-by date on this page moves with it."));
 }
 const LPU={"Can":24*0.375,"10 Pack":10*0.375,"Keg":50,"30L Keg":30};
-function litres(r){return (num(r.units)||0)*(LPU[r.pack]||1);}
+function litres(r){return runUnits(r)*(LPU[r.pack]||1);}
 
 function newRun(sku,packDate,units,existing){
   const s=sku?{pid:sku.split("__")[0],pack:(skus().find(x=>x.id===sku)||{}).pack}:null;
@@ -2237,7 +2525,12 @@ function newRun(sku,packDate,units,existing){
       field("Brew date",el("input",{type:"date",id:"rb",value:r.brewDate||"",
         onchange:()=>syncBrew(b,true)}),"When it goes into the tank"),
       field("Pack date",el("input",{type:"date",id:"rd",value:r.packDate,onchange:()=>syncBrew(b)})),
-      field("Units",el("input",{type:"number",id:"ru",value:r.units,placeholder:"576"}))));
+      field("Units planned",el("input",{type:"number",id:"ru",value:r.units,placeholder:"576"}))));
+    b.append(el("div",{class:"grid2"},
+      field("Units actually packaged",el("input",{type:"number",id:"ra",
+        value:r.actualUnits!=null?r.actualUnits:"",placeholder:"leave blank until it's run"}),
+        "Once this is filled in the coldroom works off it, not the plan"),
+      el("div",{})));
     b.append(el("div",{class:"grid2"},
       field("Status",sel([["planned","Planned"],["confirmed","Confirmed"],["cancelled","Cancelled"]],r.status,{id:"rs"})),
       el("div",{})));
@@ -2247,8 +2540,10 @@ function newRun(sku,packDate,units,existing){
       onclick:()=>{S.runs=S.runs.filter(x=>x.id!==r.id);remove("runs",r.id);$("#dlg").close();render();}},"Delete run"));
     syncPacks(b,r.pack,"rp","rk"); syncBrew(b);
   },body=>{
+    const act=num($("#ra",body).value);
     const rec={id:r.id,productId:$("#rp",body).value,pack:$("#rk",body).value,packDate:$("#rd",body).value,
       units:num($("#ru",body).value)||0,status:$("#rs",body).value,note:$("#rn",body).value.trim()};
+    if(act!=null) rec.actualUnits=act;
     if(!rec.packDate||!rec.units){flash("A run needs a pack date and a quantity");return false;}
     const p=P(rec.productId)||{};
     /* a brew date typed in stands; left alone it follows the product's lead time */
@@ -2275,17 +2570,93 @@ function syncBrew(b,fromBrew){
     (days===lead?". ":", so this one is "+Math.abs(days-lead)+" days "+(days>lead?"longer":"shorter")+". ")+
     "It lands in the coldroom in the week commencing "+fmtW(monday(d))+".");
 }
+function runsInWeek(sku,week){
+  return S.runs.filter(r=>skuId(r.productId,r.pack)===sku&&monday(r.packDate)===week&&r.status!=="cancelled");
+}
+/* A week's runs, with the one figure that gets corrected after the fact —
+   what actually came off the line — editable right here, so a short run or an
+   over-run doesn't need the whole dialog opened for each one. */
 function editRunsForWeek(sku,week){
-  const s=skus().find(x=>x.id===sku);
-  const rs=S.runs.filter(r=>skuId(r.productId,r.pack)===sku&&monday(r.packDate)===week&&r.status!=="cancelled");
-  if(rs.length===1) return newRun(sku,null,null,rs[0]);
+  const rs=runsInWeek(sku,week);
+  if(!rs.length) return newRun(sku,week);
   openDialog("Runs in w/c "+fmtWY(week),b=>{
-    for(const r of rs) b.append(el("div",{class:"row"},
-      el("span",{},fmtD(r.packDate)+" · "+n0(r.units)+" "+(PACK_UNIT[r.pack]||"units")),
-      el("button",{class:"btn sm",type:"button",onclick:()=>{$("#dlg").close();newRun(sku,null,null,r);}},"Edit")));
+    b.append(el("div",{class:"note"},el("b",{},"Packaged figures. "),
+      "Planned is what was scheduled. Fill in what actually came off the line and the "+
+      "coldroom works off that instead — leave it blank and the plan stands."));
+    const t=el("table",{class:"mini"});
+    t.append(el("thead",{},el("tr",{},el("th",{},"Pack date"),el("th",{class:"num"},"Planned"),
+      el("th",{class:"num"},"Actual"),el("th",{},""))));
+    const body=el("tbody");
+    for(const r of rs){
+      const inp=el("input",{class:"cellinp num",type:"number",step:"0.5",
+        value:r.actualUnits!=null?r.actualUnits:"",placeholder:n0(r.units),
+        onchange:e=>{
+          const v=num(e.target.value);
+          if(v==null) delete r.actualUnits; else r.actualUnits=v;
+          persist("runs",r); S.calcCache=null;
+          flash(v==null?"Back to the planned figure":"Packaged figure saved");
+        }});
+      body.append(el("tr",{},
+        el("td",{class:"mono"},fmtD(r.packDate)),
+        el("td",{class:"num dim"},n0(r.units)),
+        el("td",{class:"cell"},inp),
+        el("td",{},el("button",{class:"btn sm",type:"button",
+          onclick:()=>{$("#dlg").close();newRun(sku,null,null,r);}},"Edit run"))));
+    }
+    t.append(body); b.append(t);
     b.append(el("button",{class:"btn",type:"button",style:"align-self:flex-start",
       onclick:()=>{$("#dlg").close();newRun(sku,week);}},"Add another run"));
-  });
+  },()=>{ render(); },"Done");
+}
+/* ---- returns ----
+   Everything recorded about stock that came back from one channel, with the
+   destination that decides whether it is stock again or just history. */
+function editReturns(s,locId){
+  const list=()=>returnsOf(s.id).filter(r=>!locId||r.loc===locId)
+    .slice().sort((a,b)=>a.wk<b.wk?1:-1);
+  openDialog("Returns — "+s.product.name+" "+s.pack,b=>{
+    b.append(el("div",{class:"note"},
+      "A return takes stock off that channel's shelf and out of their drawdown. ",
+      el("b",{},"Back to the coldroom "),"makes it sellable again; ",
+      el("b",{},"quarantined "),"and ",el("b",{},"written off "),"are recorded but add nothing back."));
+    const form=el("div",{class:"grid3"});
+    const chans=compute(s.id).rows.filter(r=>r.tracks).map(r=>[r.loc.id,r.loc.name]);
+    const all=chans.length?chans:S.locations.map(l=>[l.id,l.name]);
+    form.append(
+      field("Channel",sel(all,locId||all[0][0],{id:"rtl"})),
+      field("Week",el("input",{type:"date",id:"rtw",value:S.config.currentWeek}),"Snaps to the Monday"),
+      field("Units",el("input",{type:"number",id:"rtq",step:"0.5",placeholder:"12"})));
+    b.append(form);
+    b.append(el("div",{class:"grid2"},
+      field("Where it went",sel(Object.entries(RET_DEST),"coldroom",{id:"rtd"})),
+      field("Reason",el("input",{type:"text",id:"rtn",placeholder:"Short-dated, rejected on delivery"}))));
+    b.append(el("button",{class:"btn pri",type:"button",style:"align-self:flex-start",onclick:()=>{
+      const q=num($("#rtq",b).value);
+      if(!q){flash("How many came back?");return;}
+      addReturn(s.id,{wk:monday($("#rtw",b).value||S.config.currentWeek),loc:$("#rtl",b).value,
+        qty:q,dest:$("#rtd",b).value,note:$("#rtn",b).value.trim()});
+      $("#dlg").close(); render(); flash("Return recorded");
+    }},"Record this return"));
+    const have=list();
+    if(have.length){
+      const t=el("table",{class:"mini"});
+      t.append(el("thead",{},el("tr",{},el("th",{},"Week"),el("th",{},"Channel"),
+        el("th",{class:"num"},"Units"),el("th",{},"Where it went"),el("th",{},"Reason"),el("th",{},""))));
+      const body=el("tbody");
+      for(const r of have) body.append(el("tr",{},
+        el("td",{class:"mono"},fmtW(r.wk)),
+        el("td",{},(L(r.loc)||{name:r.loc}).name),
+        el("td",{class:"num"},n0(r.qty)),
+        el("td",{},el("span",{class:"chip "+(r.dest==="coldroom"?"ok":r.dest==="writeoff"?"warn":"")},RET_DEST[r.dest]||r.dest)),
+        el("td",{class:"dim"},r.note||"—"),
+        el("td",{},el("button",{class:"btn sm",type:"button",title:"Remove this return",
+          onclick:()=>{if(!confirm("Remove this return? The drawdown goes back to what it was."))return;
+            dropReturn(s.id,r.id);$("#dlg").close();render();}},"×"))));
+      t.append(body); b.append(t);
+    } else {
+      b.append(el("div",{class:"empty"},"Nothing recorded yet for this SKU."));
+    }
+  },()=>{render();},"Done");
 }
 </script>
 <script>
@@ -2859,7 +3230,9 @@ function viewSetup(pane,ctl){
   const pb=el("tbody");
   for(const p of S.products.slice().sort((a,b)=>(a.forecast===false)-(b.forecast===false)||(a.sort|0)-(b.sort|0))){
     pb.append(el("tr",{},
-      el("td",{},el("b",{},p.name)),
+      el("td",{},el("span",{class:"row",style:"gap:7px;align-items:center"},
+        ...(p.packs||[]).slice(0,4).map(q=>swatch(p.id+"__"+slug(q.code),q.code)),
+        el("b",{},p.name))),
       el("td",{class:"dim"},(p.packs||[]).map(q=>q.code).join(", ")||"—"),
       el("td",{class:"dim mono"},(p.packs||[]).map(q=>q.code.replace("30L Keg","30L")+" "+q.shelfLifeMonths+"m").join("  ")||"—"),
       el("td",{class:"num"},(p.brewToPackDays||21)+" d"),
@@ -2867,6 +3240,36 @@ function viewSetup(pane,ctl){
       el("td",{},el("button",{class:"btn sm",onclick:()=>editProduct(p)},"Edit"))));
   }
   pt.append(pb);pw.append(pt);pc.append(pw);pane.append(pc);
+
+  /* where stock sits inside a location — the stocktake's "Where" column */
+  const ac=el("div",{class:"card"});
+  const areas=areaList();
+  ac.append(el("header",{},el("h3",{},"Storage areas"),
+    el("span",{class:"chip"},areas.length+(areas.length===1?" area":" areas")),
+    el("span",{style:"flex:1"}),
+    el("span",{class:"hint"},"Picked per line when counting, so stock can be found again")));
+  const ab=el("div",{class:"body",style:"display:flex;flex-direction:column;gap:10px"});
+  const chips=el("div",{class:"row",style:"flex-wrap:wrap;gap:6px"});
+  const drawAreas=()=>{
+    clear(chips);
+    for(const a of areaList()) chips.append(el("span",{class:"chip acc"},a,
+      el("button",{class:"x",title:"Remove "+a,onclick:()=>{
+        S.config.areas=areaList().filter(x=>x!==a); saveConfig(); reflow();
+      }},"×")));
+    if(!areaList().length) chips.append(el("span",{class:"hint"},
+      "None yet — add the bays, racks and cool rooms you count against."));
+  };
+  drawAreas();
+  const inp=el("input",{type:"text",placeholder:"Cool room rack 3",style:"max-width:240px"});
+  const add=()=>{
+    const v=inp.value.trim(); if(!v) return;
+    if(areaList().includes(v)){flash("Already on the list");return;}
+    S.config.areas=[...areaList(),v]; saveConfig(); inp.value=""; drawAreas(); reflow();
+  };
+  inp.addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();add();}});
+  ab.append(chips,el("div",{class:"row",style:"gap:8px"},inp,
+    el("button",{class:"btn",onclick:add},"Add area")));
+  ac.append(ab); pane.append(ac);
 
   /* locations */
   const lc=el("div",{class:"card"});
@@ -2974,9 +3377,14 @@ function editProduct(p){
       const on=el("input",{type:"checkbox",id:"pk-"+slug(code),checked:!!q});
       const sh=el("input",{type:"number",id:"sh-"+slug(code),value:(q&&q.shelfLifeMonths)||PACK_SHELF[code],
         min:"1",max:"60",style:"width:70px"});
+      /* a colour per SKU, so a beer is the same colour wherever it appears */
+      const cl=el("input",{type:"color",class:"swin",id:"cl-"+slug(code),
+        value:skuColour((rec.id||slug($("#pn",b)?$("#pn",b).value:"x"))+"__"+slug(code),code),
+        title:"Colour for "+code});
       pk.append(el("div",{class:"row",style:"align-items:center"},
         el("label",{class:"row",style:"align-items:center;gap:7px;min-width:130px"},on,el("span",{},code)),
-        el("span",{class:"hint"},"shelf life"),sh,el("span",{class:"hint"},"months · "+PACK_UNIT[code])));
+        el("span",{class:"hint"},"shelf life"),sh,el("span",{class:"hint"},"months · "+PACK_UNIT[code]),
+        el("span",{style:"flex:1"}),el("span",{class:"hint"},"colour"),cl));
     }
     b.append(pk);
     b.append(el("div",{class:"note"},"Send-by is best before minus half the shelf life set here, ",
@@ -2995,6 +3403,8 @@ function editProduct(p){
     rec.forecast=$("#pf",body).value==="yes";
     rec.packs=PACKS.filter(c=>$("#pk-"+slug(c),body).checked).map(c=>({code:c,unitLabel:PACK_UNIT[c],
       shelfLifeMonths:num($("#sh-"+slug(c),body).value)||PACK_SHELF[c],active:true}));
+    rec.colour=rec.colour||{};
+    for(const c of PACKS){ const inp=$("#cl-"+slug(c),body); if(inp) rec.colour[c]=inp.value; }
     if(isNew) S.products.push(rec);
     S.products.sort((a,b2)=>(a.sort|0)-(b2.sort|0));
     persist("products",rec);
