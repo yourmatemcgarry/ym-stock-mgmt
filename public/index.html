@@ -104,6 +104,7 @@ table.mini td.num,table.mini th.num{text-align:right;font-family:var(--mono)}
 .trow.thead .tname{background:var(--surface-2);z-index:7}
 .tname.bad b{color:var(--warn)}
 .tlane{position:relative;flex:1;min-height:30px}
+.tlane.loose{max-height:132px;overflow-y:auto;overflow-x:hidden}
 .tday{position:absolute;top:0;bottom:0;border-right:1px solid var(--line-soft)}
 .tday.mon{border-right-color:var(--line);background:var(--sunk)}
 .trow.thead .tday{display:flex;align-items:center;padding-left:3px}
@@ -114,6 +115,9 @@ table.mini td.num,table.mini th.num{text-align:right;font-family:var(--mono)}
   box-shadow:0 1px 2px rgba(0,0,0,.35)}
 .tbar.dragging{cursor:grabbing;opacity:.75;z-index:9}
 .tbar.over{outline:2px solid var(--crit);outline-offset:-2px}
+/* a brew with nowhere to go yet: hatched, so it reads as unfinished business */
+.tbar.loose{outline:2px dashed var(--warn);outline-offset:-2px;
+  background-image:repeating-linear-gradient(45deg,rgba(0,0,0,.18) 0 5px,transparent 5px 10px)}
 .tbar .lab{flex:1;padding:0 6px;font:600 10.5px/1 var(--sans);white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis}
 .tbar .grab{width:7px;align-self:stretch;flex:none;cursor:ew-resize;
@@ -382,7 +386,7 @@ dialog footer{padding:12px 16px;border-top:1px solid var(--line-soft);display:fl
 /* Which build this is. It shows at the bottom of the sidebar and on Setup, so
    there is never any doubt about whether a deploy actually landed: if the
    stamp hasn't changed after deploying, the browser is still on the old file. */
-const BUILD="2026-10-20c · tank board, brand colours, per-SKU volumes";
+const BUILD="2026-10-20d · weekly tank schedule, split tanks, run volumes";
 /* ============================ helpers ============================ */
 const $ = (s,r)=> (r||document).querySelector(s);
 const el = (t,a,...k)=>{const n=document.createElement(t);
@@ -2394,28 +2398,51 @@ function seedTanks(){
   S.config.tanks=TANK_SEED.map(([name,cap])=>({name,cap}));
   saveConfig();
 }
-/* every run sitting in a tank on a given day */
-function tankRuns(name,from,to){
-  return S.runs.filter(r=>r.tank===name&&r.status!=="cancelled"
-    &&(r.brewDate||r.packDate)<=to&&r.packDate>=from);
+/* ---- where a brew sits ----
+   A brew can be split across tanks: 12,000 L of Larry might go 8,000 into
+   FV-07 and 4,000 into FV-11. Each slice is {tank, litres}. An older run with
+   a single `tank` is read as one slice holding the lot. */
+function runTanks(r){
+  if(Array.isArray(r.tanks)&&r.tanks.length)
+    return r.tanks.filter(x=>x&&x.tank).map(x=>({tank:x.tank,litres:num(x.litres)||0}));
+  if(r.tank) return [{tank:r.tank,litres:brewLitres(r)}];
+  return [];
 }
-/* what a tank is holding, and where it is in trouble: more litres than it
-   takes, or two different beers in it at once */
+function allocated(r){ return sum(runTanks(r).map(x=>x.litres)); }
+/* what still has nowhere to go */
+function unallocated(r){ return Math.max(0,Math.round((brewLitres(r)-allocated(r))*10)/10); }
+function setRunTanks(r,list){
+  const keep=list.filter(x=>x.tank&&num(x.litres)>0)
+    .map(x=>({tank:x.tank,litres:Math.round(num(x.litres)*10)/10}));
+  if(keep.length){ r.tanks=keep; r.tank=keep[0].tank; }
+  else { delete r.tanks; delete r.tank; }
+}
+function brewStart(r){
+  return r.brewDate||iso(new Date(D(r.packDate)-((P(r.productId)||{}).brewToPackDays||21)*DAY));
+}
+/* every brew with beer in this tank over a span of weeks */
+function tankRuns(name,from,to){
+  return S.runs.filter(r=>r.status!=="cancelled"&&r.packDate
+    &&runTanks(r).some(x=>x.tank===name)
+    &&monday(brewStart(r))<=to&&monday(r.packDate)>=from);
+}
+/* what a tank is holding week by week, and where it is in trouble: more
+   litres than it takes, or two different beers in it at once */
 function tankTrouble(name){
   const t=tankOf(name); if(!t) return [];
-  const rs=S.runs.filter(r=>r.tank===name&&r.status!=="cancelled"&&r.packDate);
-  const days=new Set();
-  for(const r of rs){ days.add(r.brewDate||r.packDate); days.add(r.packDate); }
+  const rs=S.runs.filter(r=>r.status!=="cancelled"&&r.packDate&&runTanks(r).some(x=>x.tank===name));
+  const weeks=new Set();
+  for(const r of rs){ weeks.add(monday(brewStart(r))); weeks.add(monday(r.packDate)); }
   const out=[];
-  for(const d of days){
-    const on=rs.filter(r=>(r.brewDate||r.packDate)<=d&&r.packDate>=d);
+  for(const w of weeks){
+    const on=rs.filter(r=>monday(brewStart(r))<=w&&monday(r.packDate)>=w);
     if(!on.length) continue;
-    const vol=sum(on.map(brewLitres));
+    const vol=sum(on.map(r=>(runTanks(r).find(x=>x.tank===name)||{}).litres||0));
     const brands=[...new Set(on.map(r=>r.productId))];
-    if(vol>t.cap+0.5) out.push({day:d,kind:"over",vol:Math.round(vol),cap:t.cap,runs:on.length});
-    else if(brands.length>1) out.push({day:d,kind:"mixed",brands,runs:on.length});
+    if(vol>t.cap+0.5) out.push({week:w,kind:"over",vol:Math.round(vol),cap:t.cap,runs:on.length});
+    else if(brands.length>1) out.push({week:w,kind:"mixed",brands,runs:on.length});
   }
-  return out;
+  return out.sort((a,b)=>a.week<b.week?-1:1);
 }
 function brewWeek(r){ return monday(r.brewDate||r.packDate); }
 function packWeek(r){ return monday(r.packDate); }
@@ -2431,179 +2458,82 @@ function capacityRows(weeks){
   }
   return {brew,pack};
 }
-function productionTimeline(pane){
-  const start=S.config.currentWeek;
-  const weeks=[]; for(let i=0;i<prodWeeks;i++) weeks.push(wkAdd(start,i));
-  const last=weeks[weeks.length-1];
-  const {brew,pack}=capacityRows(weeks);
-  const bc=num(S.config.brewCap)||0, pc=num(S.config.packCap)||0;
-  const over=weeks.filter(w=>(bc&&brew[w]>bc)||(pc&&pack[w]>pc));
-
-  const card=el("div",{class:"card"});
-  card.append(el("header",{},el("h3",{},"Timeline"),
-    el("span",{class:"hint"},"brew week to pack week, "+prodWeeks+" weeks from "+fmtD(start)),
-    el("span",{style:"flex:1"}),
-    sel([[13,"13 weeks"],[26,"26 weeks"],[52,"52 weeks"]],prodWeeks,
-      {onchange:e=>{prodWeeks=+e.target.value;render();}})));
-  /* fixed layout only settles the columns if the table itself has a width */
-  const scroll=el("div",{class:"scroll tall"});
-  const tb=el("table",{class:"tl",style:"width:"+(230+weeks.length*46)+"px"});
-  const hr=el("tr",{},el("th",{class:"stick"},"Week commencing"));
-  weeks.forEach((w,i)=>{
-    const yr=String(D(w).getUTCFullYear()).slice(2);
-    const showYr=i===0||D(w).getUTCMonth()===0&&D(wkAdd(w,-1)).getUTCMonth()===11;
-    const th=el("th",{class:"wkh"+(i===0?" now":"")},el("b",{},fmtW(w)),showYr?yr:"");
-    th.title=w; hr.append(th);
-  });
-  tb.append(el("thead",{},hr));
-  const body=el("tbody");
-
-  const capRow=(label,map,cap,cls)=>{
-    const tr=el("tr",{class:"cap"});
-    tr.append(el("td",{class:"stick"},el("div",{class:"lbl"},
-      el("span",{class:"tag "+cls},cls==="b"?"brew":"pack"),label,
-      cap?el("span",{class:"hint"},"  cap "+n0(cap)+" L"):null)));
-    for(const w of weeks){
-      const v=map[w]||0;
-      const pct=cap?Math.min(100,v/cap*100):0;
-      const td=el("td",{class:"v"+(cap&&v>cap?" neg":"")});
-      td.title=fmtW(w)+" — "+n0(v)+" L"+(cap?" of "+n0(cap)+" L ("+Math.round(v/cap*100)+"%)":"");
-      if(v>0){
-        if(cap) td.append(el("div",{class:"capbar"+(v>cap?" over":"")},
-          el("i",{style:"height:"+Math.max(8,pct)+"%"})));
-        td.append(el("span",{class:"capnum"},n0(Math.round(v/100)/10)+"k"));
-      } else td.append(el("span",{class:"capnum dim"},"·"));
-      tr.append(td);
-    }
-    return tr;
-  };
-  body.append(capRow("Into tank",brew,bc,"b"));
-  body.append(capRow("Packaged",pack,pc,"p"));
-  body.append(el("tr",{class:"sep"},el("td",{colspan:weeks.length+1})));
-
-  const runs=S.runs.filter(r=>r.status!=="cancelled"&&packWeek(r)>=start&&brewWeek(r)<=last)
-    .sort((a,b)=>brewWeek(a)<brewWeek(b)?-1:brewWeek(a)>brewWeek(b)?1:(a.packDate<b.packDate?-1:1));
-  if(!runs.length){
-    body.append(el("tr",{},el("td",{colspan:weeks.length+1},
-      el("div",{class:"empty"},"Nothing scheduled in this window."))));
-  }
-  for(const r of runs){
-    const bI=Math.max(0,weeks.indexOf(brewWeek(r))), pI=weeks.indexOf(packWeek(r));
-    const from=brewWeek(r)<start?0:bI, to=pI<0?weeks.length-1:pI;
-    const tr=el("tr",{});
-    const p=P(r.productId)||{name:r.productId};
-    tr.append(el("td",{class:"stick"},el("div",{class:"lbl"},
-      el("span",{style:"overflow:hidden;text-overflow:ellipsis;flex:1"},p.name+" "+r.pack),
-      el("span",{class:"hint"},n0(r.units)),
-      el("button",{class:"btn sm",title:"Edit this run",
-        onclick:()=>newRun(null,null,null,r)},"Edit"))));
-    if(from>0) tr.append(el("td",{colspan:from}));
-    const span=Math.max(1,to-from+1);
-    const bar=el("td",{colspan:span,class:"barcell"});
-    const L=litres(r);
-    const short=(L>=1000?(Math.round(L/100)/10)+"k":n0(L))+" L";
-    bar.append(el("div",{class:"runbar "+(r.status==="confirmed"?"ok":"plan")},
-      el("span",{},span>=4?(fmtD(r.brewDate||r.packDate)+" → "+fmtD(r.packDate)+"  ·  "+short):short)));
-    bar.title=p.name+" "+r.pack+" — brew "+fmtD(r.brewDate||"?")+", pack "+fmtD(r.packDate)+
-      ", "+n0(r.units)+" units ("+n0(litres(r))+" L)";
-    tr.append(bar);
-    if(to<weeks.length-1) tr.append(el("td",{colspan:weeks.length-1-to}));
-    body.append(tr);
-  }
-  tb.append(body); scroll.append(tb); card.append(scroll);
-  if(over.length) card.append(el("div",{class:"note",style:"margin:0;border:0;border-top:1px solid var(--line-soft);border-radius:0"},
-    el("b",{},over.length+" week"+(over.length===1?"":"s")+" over capacity: "),
-    over.slice(0,6).map(w=>fmtD(w)).join(", ")+(over.length>6?" and more":"")+
-    ". Move a run's brew or pack date to spread the load."));
-  pane.append(card);
-  return {weeks,brew,pack,over};
-}
-/* ---- the tank board ----
-   One row per tank, one column per day. A run sits in its tank from the day it
-   goes in to the day it is packaged. Double-click a bar to open the run; drag
-   it to move it to another tank or another day; drag either end to change how
-   long it is in tank. A tank goes amber when what is in it on some day adds up
-   to more than it holds, or when two different beers are in it at once. */
-let tankDays=56, tankFrom=null;
-const DAYW=18;
+/* ---- the tank schedule ----
+   One row per tank, one column per week. A brew sits in its tank from the week
+   it goes in to the week it is packaged, and can be split across tanks — each
+   slice shows the litres in that tank. The top lane holds anything not yet in
+   a tank. Double-click a bar to open the run; drag it sideways to move the
+   weeks, up or down to move that slice to another tank, or take either end to
+   change how long it is in tank. A tank goes amber when a week's contents add
+   up to more than it holds, or two different beers are in it at once. */
+let tankWeeks=16, tankFrom=null;
+const WKW=46;
 function tankTimeline(pane){
   const list=tanks();
   const card=el("div",{class:"card"});
-  const start=tankFrom||iso(new Date(D(S.config.currentWeek)-7*DAY));
-  card.append(el("header",{},el("h3",{},"Tanks"),
+  const start=tankFrom||wkAdd(S.config.currentWeek,-2);
+  const loose=S.runs.filter(r=>r.status!=="cancelled"&&r.packDate&&unallocated(r)>0.5);
+  card.append(el("header",{},el("h3",{},"Tank schedule"),
     el("span",{class:"hint"},list.length?"Drag a brew to move it; double-click to open it":"No tanks set up yet"),
     el("span",{style:"flex:1"}),
-    el("button",{class:"btn sm",onclick:()=>{tankFrom=iso(new Date(D(start)-28*DAY));render();}},"◀ 4 wks"),
+    loose.length?el("span",{class:"chip warn"},loose.length+" without a tank"):null,
+    el("button",{class:"btn sm",onclick:()=>{tankFrom=wkAdd(start,-8);render();}},"◀"),
     el("button",{class:"btn sm",onclick:()=>{tankFrom=null;render();}},"Today"),
-    el("button",{class:"btn sm",onclick:()=>{tankFrom=iso(new Date(+D(start)+28*DAY));render();}},"4 wks ▶"),
-    sel([[28,"4 weeks"],[56,"8 weeks"],[84,"12 weeks"]],tankDays,
-      {onchange:e=>{tankDays=+e.target.value;render();}})));
+    el("button",{class:"btn sm",onclick:()=>{tankFrom=wkAdd(start,8);render();}},"▶"),
+    sel([[8,"8 weeks"],[16,"16 weeks"],[26,"26 weeks"],[52,"52 weeks"]],tankWeeks,
+      {onchange:e=>{tankWeeks=+e.target.value;render();}})));
   if(!list.length){
     card.append(el("div",{class:"empty"},el("b",{},"No tanks yet"),
       "Add them under Setup, or load the brewery's list there."));
     pane.append(card); return;
   }
-  const days=[]; for(let i=0;i<tankDays;i++) days.push(iso(new Date(+D(start)+i*DAY)));
-  const dayIx={}; days.forEach((d,i)=>dayIx[d]=i);
+  const weeks=[]; for(let i=0;i<tankWeeks;i++) weeks.push(wkAdd(start,i));
+  const wkIx={}; weeks.forEach((w,i)=>wkIx[w]=i);
   const scroll=el("div",{class:"scroll tall"});
-  const grid=el("div",{class:"tank",style:"width:"+(150+days.length*DAYW)+"px"});
+  const grid=el("div",{class:"tank",style:"width:"+(150+weeks.length*WKW)+"px"});
 
-  /* the date strip: a tick every Monday, so a week is readable at a glance */
   const head=el("div",{class:"trow thead"});
   head.append(el("div",{class:"tname"},"Tank"));
   const lane=el("div",{class:"tlane"});
-  days.forEach((d,i)=>{
-    const dd=D(d), mon=dd.getUTCDay()===1;
-    const c=el("div",{class:"tday"+(mon?" mon":"")+(d===iso(new Date())?" today":""),
-      style:"left:"+(i*DAYW)+"px;width:"+DAYW+"px"});
-    if(mon) c.append(el("b",{},fmtW(d)));
-    c.title=fmtD(d);
+  weeks.forEach((w,i)=>{
+    const c=el("div",{class:"tday mon"+(w===S.config.currentWeek?" today":""),
+      style:"left:"+(i*WKW)+"px;width:"+WKW+"px"});
+    c.append(el("b",{},fmtW(w)));
+    c.title="w/c "+fmtD(w);
     lane.append(c);
   });
   head.append(lane); grid.append(head);
 
+  /* anything with beer still to put somewhere */
+  if(loose.length){
+    const row=el("div",{class:"trow warnrow"});
+    row.append(el("div",{class:"tname bad"},el("b",{},"Not in a tank"),
+      el("span",{class:"hint"},loose.length+" brew"+(loose.length===1?"":"s"))));
+    /* there can be a lot of these; the lane scrolls on its own rather than
+       pushing the tanks off the screen */
+    const l=el("div",{class:"tlane loose","data-tank":""});
+    weeks.forEach((w,i)=>l.append(el("div",{class:"tday mon",
+      style:"left:"+(i*WKW)+"px;width:"+WKW+"px"})));
+    layoutBars(l,loose.map(r=>({r,litres:unallocated(r),tank:""})),weeks,wkIx,null);
+    row.append(l); grid.append(row);
+  }
+
   for(const t of list){
     const row=el("div",{class:"trow"});
-    const bad=tankTrouble(t.name).filter(x=>dayIx[x.day]!=null);
+    const bad=tankTrouble(t.name).filter(x=>wkIx[x.week]!=null);
     row.append(el("div",{class:"tname"+(bad.length?" bad":"")},
       el("b",{},t.name),el("span",{class:"hint"},n0(t.cap)+" L")));
     const l=el("div",{class:"tlane","data-tank":t.name});
-    days.forEach((d,i)=>l.append(el("div",{class:"tday"+(D(d).getUTCDay()===1?" mon":""),
-      style:"left:"+(i*DAYW)+"px;width:"+DAYW+"px"})));
-    /* several brews can share a tank, so overlapping bars stack rather than
-       hide each other, and the row grows to fit them */
-    const mine=S.runs.filter(r=>r.tank===t.name&&r.status!=="cancelled"&&r.packDate)
-      .map(r=>({r,b0:r.brewDate||iso(new Date(D(r.packDate)-((P(r.productId)||{}).brewToPackDays||21)*DAY))}))
-      .filter(x=>x.r.packDate>=days[0]&&x.b0<=days[days.length-1])
-      .sort((a,b)=>a.b0<b.b0?-1:1);
-    const ends=[];
-    for(const x of mine){
-      let k=ends.findIndex(e=>e<x.b0);
-      if(k<0){ k=ends.length; ends.push(""); }
-      ends[k]=x.r.packDate; x.lane=k;
+    weeks.forEach((w,i)=>l.append(el("div",{class:"tday mon"+(w===S.config.currentWeek?" today":""),
+      style:"left:"+(i*WKW)+"px;width:"+WKW+"px"})));
+    const mine=[];
+    for(const r of S.runs){
+      if(r.status==="cancelled"||!r.packDate) continue;
+      const slice=runTanks(r).find(x=>x.tank===t.name);
+      if(!slice) continue;
+      mine.push({r,litres:slice.litres,tank:t.name});
     }
-    if(ends.length>1) l.style.minHeight=(ends.length*26+6)+"px";
-    for(const x of mine){
-      const r=x.r, b0=x.b0;
-      const i0=Math.max(0,dayIx[b0]!=null?dayIx[b0]:0);
-      const i1=Math.min(days.length-1,dayIx[r.packDate]!=null?dayIx[r.packDate]:days.length-1);
-      const vol=brewLitres(r);
-      const over=vol>t.cap+0.5;
-      const bar=el("div",{class:"tbar"+(over?" over":""),"data-run":r.id,
-        style:"left:"+(i0*DAYW+1)+"px;width:"+((i1-i0+1)*DAYW-2)+"px;"
-             +(ends.length>1?"top:"+(3+x.lane*26)+"px;height:22px;bottom:auto;":"")
-             +"background:"+brandColour(r.productId)});
-      bar.title=(P(r.productId)||{}).name+" "+r.pack+" · "+n0(runUnits(r))+" "
-        +(PACK_UNIT[r.pack]||"units").toLowerCase()+" · "+n0(vol)+" L in tank\n"
-        +fmtD(b0)+" → "+fmtD(r.packDate)+" ("+dDiff(b0,r.packDate)+" days)"
-        +(over?"\nOver this tank's "+n0(t.cap)+" L":"");
-      bar.append(el("span",{class:"grab l"}));
-      bar.append(el("span",{class:"lab"},(P(r.productId)||{}).name+" "+r.pack+" · "+kl(vol)+"L"));
-      bar.append(el("span",{class:"grab r"}));
-      bar.addEventListener("dblclick",ev=>{ev.stopPropagation();newRun(null,null,null,r);});
-      bar.addEventListener("pointerdown",ev=>tankDrag(ev,r,days,start));
-      l.append(bar);
-    }
+    layoutBars(l,mine,weeks,wkIx,t);
     if(bad.length) row.classList.add("warnrow");
     row.append(l); grid.append(row);
   }
@@ -2614,64 +2544,126 @@ function tankTimeline(pane){
     const n=el("div",{class:"note",style:"border-color:var(--warn)"});
     n.append(el("b",{},"Tank clashes. "));
     n.append(trouble.map(x=>{
-      const first=x.bad[0];
-      return x.t.name+" — "+(first.kind==="over"
-        ?(n0(first.vol)+" L in a "+n0(x.t.cap)+" L tank on "+fmtD(first.day))
-        :("two beers at once on "+fmtD(first.day)));
+      const f=x.bad[0];
+      return x.t.name+" — "+(f.kind==="over"
+        ?(n0(f.vol)+" L in a "+n0(x.t.cap)+" L tank, w/c "+fmtD(f.week))
+        :("two beers at once, w/c "+fmtD(f.week)));
     }).join("; "));
+    card.append(n);
+  }
+  if(loose.length){
+    const n=el("div",{class:"note"});
+    n.append(el("b",{},"Not in a tank. "));
+    n.append(loose.slice(0,6).map(r=>(P(r.productId)||{}).name+" "+r.pack+" "
+      +fmtD(r.packDate)+" ("+n0(unallocated(r))+" L)").join("; ")
+      +(loose.length>6?" and "+(loose.length-6)+" more":"")
+      +". Drag one onto a tank, or open it and split it across a few.");
     card.append(n);
   }
   pane.append(card);
 }
-/* dragging a bar: the body moves it, either end stretches it */
-function tankDrag(ev,r,days,start){
-  const bar=ev.currentTarget, lane=bar.parentNode;
+/* bars for one lane, stacked so brews sharing a tank are all visible */
+function layoutBars(l,items,weeks,wkIx,tank){
+  const put=items.map(x=>Object.assign({},x,{w0:monday(brewStart(x.r)),w1:monday(x.r.packDate)}))
+    .filter(x=>x.w1>=weeks[0]&&x.w0<=weeks[weeks.length-1])
+    .sort((a,b)=>a.w0<b.w0?-1:1);
+  const ends=[];
+  for(const x of put){
+    let k=ends.findIndex(e=>e<x.w0);
+    if(k<0){ k=ends.length; ends.push(""); }
+    ends[k]=x.w1; x.lane=k;
+  }
+  if(ends.length>1){
+    /* the unallocated lane can hold a hundred brews: cap it and let it scroll,
+       rather than pushing every tank off the screen */
+    const want=ends.length*26+6, cap=l.classList.contains("loose")?132:want;
+    l.style.minHeight=Math.min(want,cap)+"px";
+    if(want>cap){ l.style.height=cap+"px";
+      for(const d of l.querySelectorAll(".tday")) d.style.height=want+"px"; }
+  }
+  for(const x of put){
+    const r=x.r;
+    const i0=Math.max(0,wkIx[x.w0]!=null?wkIx[x.w0]:0);
+    const i1=Math.min(weeks.length-1,wkIx[x.w1]!=null?wkIx[x.w1]:weeks.length-1);
+    const over=tank&&x.litres>tank.cap+0.5;
+    const bar=el("div",{class:"tbar"+(over?" over":"")+(tank?"":" loose"),
+      "data-run":r.id,"data-tank":x.tank||"",
+      style:"left:"+(i0*WKW+1)+"px;width:"+((i1-i0+1)*WKW-2)+"px;"
+           +(ends.length>1?"top:"+(3+x.lane*26)+"px;height:22px;bottom:auto;":"")
+           +"background:"+brandColour(r.productId)});
+    const split=runTanks(r);
+    bar.title=(P(r.productId)||{}).name+" "+r.pack+" · "+n0(runUnits(r))+" "
+      +(PACK_UNIT[r.pack]||"units").toLowerCase()+"\n"
+      +n0(brewLitres(r))+" L to brew"
+      +(split.length>1?", split across "+split.map(y=>y.tank+" "+n0(y.litres)+" L").join(" + "):"")
+      +"\n"+fmtD(brewStart(r))+" → "+fmtD(r.packDate)
+      +(tank?"\n"+n0(x.litres)+" L in "+tank.name:"\nNot in a tank yet")
+      +(over?"\nMore than this tank's "+n0(tank.cap)+" L":"");
+    bar.append(el("span",{class:"grab l"}));
+    bar.append(el("span",{class:"lab"},(P(r.productId)||{}).name+" "+r.pack+" · "+kl(x.litres)+"L"));
+    bar.append(el("span",{class:"grab r"}));
+    bar.addEventListener("dblclick",ev=>{ev.stopPropagation();newRun(null,null,null,r);});
+    bar.addEventListener("pointerdown",ev=>tankDrag(ev,r,x.tank,x.litres));
+    l.append(bar);
+  }
+}
+/* dragging a bar: the body moves it a week at a time or into another tank,
+   either end stretches it */
+function tankDrag(ev,r,fromTank,slice){
+  const bar=ev.currentTarget;
   const edge=ev.target.classList.contains("grab")
     ? (ev.target.classList.contains("l")?"l":"r") : null;
-  const b0=r.brewDate||iso(new Date(D(r.packDate)-((P(r.productId)||{}).brewToPackDays||21)*DAY));
-  const x0=ev.clientX, y0=ev.clientY;
-  const span=dDiff(b0,r.packDate);
-  const w0=bar.offsetWidth;
+  const b0=brewStart(r);
+  const x0=ev.clientX, y0=ev.clientY, w0=bar.offsetWidth;
+  const span=wkDiff(monday(b0),monday(r.packDate));
   bar.classList.add("dragging");
-  let moved=0, shift=0, tank=r.tank;
+  let moved=0, shift=0, tank=fromTank;
   const lanes=[...document.querySelectorAll(".tank .tlane[data-tank]")];
   const move=e=>{
     const dx=e.clientX-x0, dy=e.clientY-y0;
     moved=Math.max(moved,Math.abs(dx)+Math.abs(dy));
-    shift=Math.round(dx/DAYW);
+    shift=Math.round(dx/WKW);
     if(edge==="l"){
-      bar.style.width=Math.max(DAYW-2,w0-shift*DAYW)+"px";
-      bar.style.transform="translateX("+(shift*DAYW)+"px)";
+      bar.style.width=Math.max(WKW-2,w0-shift*WKW)+"px";
+      bar.style.transform="translateX("+(shift*WKW)+"px)";
     } else if(edge==="r"){
-      bar.style.width=Math.max(DAYW-2,(span+1+shift)*DAYW-2)+"px";
+      bar.style.width=Math.max(WKW-2,(span+1+shift)*WKW-2)+"px";
     } else {
-      bar.style.transform="translateX("+(shift*DAYW)+"px) translateY("+dy+"px)";
+      bar.style.transform="translateX("+(shift*WKW)+"px) translateY("+dy+"px)";
       const hit=lanes.find(l=>{const b=l.getBoundingClientRect();
         return e.clientY>=b.top&&e.clientY<=b.bottom;});
-      tank=hit?hit.getAttribute("data-tank"):r.tank;
+      tank=hit?hit.getAttribute("data-tank"):fromTank;
     }
   };
   const up=()=>{
     window.removeEventListener("pointermove",move);
     window.removeEventListener("pointerup",up);
     bar.classList.remove("dragging");
-    /* a click, not a drag: put the bar back where it was and leave the DOM
-       alone, or the second click of a double-click lands on a new element */
+    /* a click, not a drag: put it back and leave the DOM alone, or the second
+       click of a double-click lands on an element that no longer exists */
     if(moved<4){ bar.style.transform=""; bar.style.width=w0+"px"; return; }
-    const shiftDays=d=>iso(new Date(+D(d)+shift*DAY));
+    const shiftWk=d=>iso(new Date(+D(d)+shift*7*DAY));
     if(edge==="l"){
-      const nb=shiftDays(b0);
+      const nb=shiftWk(b0);
       if(nb<r.packDate) r.brewDate=nb;
     } else if(edge==="r"){
-      const np=shiftDays(r.packDate);
+      const np=shiftWk(r.packDate);
       if(np>b0) r.packDate=np;
     } else {
-      r.brewDate=shiftDays(b0); r.packDate=shiftDays(r.packDate);
-      if(tank&&tank!==r.tank) r.tank=tank;
+      r.brewDate=shiftWk(b0); r.packDate=shiftWk(r.packDate);
+      if(tank!==fromTank){
+        /* move this slice, leaving any other tanks on the brew alone */
+        const rest=runTanks(r).filter(x=>x.tank!==fromTank);
+        const vol=slice||unallocated(r)||brewLitres(r);
+        if(tank) rest.push({tank,litres:vol});
+        setRunTanks(r,rest);
+      }
     }
     persist("runs",r); S.calcCache=null;
-    flash((P(r.productId)||{}).name+" "+r.pack+" → "+(r.tank||"no tank")+", "
-      +fmtD(r.brewDate)+" → "+fmtD(r.packDate));
+    const where=runTanks(r);
+    flash((P(r.productId)||{}).name+" "+r.pack+" → "
+      +(where.length?where.map(x=>x.tank).join(" + "):"no tank")+", "
+      +fmtD(brewStart(r))+" → "+fmtD(r.packDate));
     render();
   };
   /* on the window, not the bar: the pointer leaves the bar as soon as it moves
@@ -2803,7 +2795,6 @@ function viewProduction(pane,ctl){
   if(bc||pc) t.append(tile("Weeks over capacity",String(overW.length),
     overW.length?"first "+fmtD(overW[0]):"inside capacity",overW.length?"alert":"good"));
   pane.append(t);
-  productionTimeline(pane);
   tankTimeline(pane);
   brandOutlook(pane,all);
 
@@ -2890,28 +2881,57 @@ function newRun(sku,packDate,units,existing){
       field("Brew date",el("input",{type:"date",id:"rb",value:r.brewDate||"",
         onchange:()=>syncBrew(b,true)}),"When it goes into the tank"),
       field("Pack date",el("input",{type:"date",id:"rd",value:r.packDate,onchange:()=>syncBrew(b)})),
-      field("Units planned",el("input",{type:"number",id:"ru",value:r.units,placeholder:"576"}))));
+      field("Units planned",el("input",{type:"number",id:"ru",value:r.units,placeholder:"576",
+        oninput:()=>volNote(b)}))));
     b.append(el("div",{class:"grid2"},
       field("Units actually packaged",el("input",{type:"number",id:"ra",
-        value:r.actualUnits!=null?r.actualUnits:"",placeholder:"leave blank until it's run"}),
+        value:r.actualUnits!=null?r.actualUnits:"",placeholder:"leave blank until it's run",
+        oninput:()=>volNote(b)}),
         "Once this is filled in the coldroom works off it, not the plan"),
       el("div",{})));
     b.append(el("div",{class:"grid2"},
       field("Status",sel([["planned","Planned"],["confirmed","Confirmed"],["cancelled","Cancelled"]],r.status,{id:"rs"})),
-      field("Tank",sel([["","— not allocated —"],...tanks().map(t=>[t.name,t.name+"  ·  "+n0(t.cap)+" L"])],
-        r.tank||"",{id:"rt"}),"Where it ferments until it's packaged")));
+      el("div",{class:"note",id:"rvol",style:"margin:0"},"—")));
     b.append(el("div",{class:"note",id:"rbrew"},"—"));
+    /* tanks: one line each, so a brew can be split across a few */
+    b.append(el("div",{class:"fld"},"Tanks"));
+    const tk=el("div",{id:"rtanks",style:"display:flex;flex-direction:column;gap:6px"});
+    const addRow=(tank,lt)=>{
+      const row=el("div",{class:"row",style:"gap:8px;align-items:center"});
+      const ts=sel([["","— pick a tank —"],...tanks().map(t=>[t.name,t.name+"  ·  "+n0(t.cap)+" L"])],
+        tank||"",{class:"rtk"});
+      const li=el("input",{type:"number",class:"rtl",step:"1",min:"0",style:"max-width:120px",
+        value:lt!=null?Math.round(lt):"",placeholder:"litres"});
+      ts.addEventListener("change",()=>volNote(b));
+      li.addEventListener("input",()=>volNote(b));
+      row.append(ts,li,el("span",{class:"hint"},"L"),
+        el("button",{class:"btn sm",type:"button",title:"Remove this tank",
+          onclick:()=>{row.remove();volNote(b);}},"×"));
+      tk.append(row);
+    };
+    for(const x of runTanks(r)) addRow(x.tank,x.litres);
+    if(!runTanks(r).length) addRow("",null);
+    b.append(tk);
+    b.append(el("div",{class:"row",style:"gap:8px"},
+      el("button",{class:"btn sm",type:"button",onclick:()=>{addRow("",null);volNote(b);}},"Split across another tank"),
+      el("button",{class:"btn sm",type:"button",title:"Put all of it in the first tank",
+        onclick:()=>{const rows=[...$("#rtanks",b).children];
+          if(!rows.length) return;
+          const need=brewVolFrom(b);
+          rows.forEach((row,i)=>{row.querySelector(".rtl").value=i===0?Math.round(need):"";});
+          volNote(b);}},"Fill the first")));
     b.append(field("Note",el("input",{type:"text",id:"rn",value:r.note||"",placeholder:"Tank 4, double batch"})));
     if(existing) b.append(el("button",{class:"btn danger",type:"button",style:"align-self:flex-start",
       onclick:()=>{S.runs=S.runs.filter(x=>x.id!==r.id);remove("runs",r.id);$("#dlg").close();render();}},"Delete run"));
-    syncPacks(b,r.pack,"rp","rk"); syncBrew(b);
+    syncPacks(b,r.pack,"rp","rk"); syncBrew(b); volNote(b);
   },body=>{
     const act=num($("#ra",body).value);
     const rec={id:r.id,productId:$("#rp",body).value,pack:$("#rk",body).value,packDate:$("#rd",body).value,
       units:num($("#ru",body).value)||0,status:$("#rs",body).value,note:$("#rn",body).value.trim()};
     if(act!=null) rec.actualUnits=act;
-    const tk=$("#rt",body)?$("#rt",body).value:"";
-    if(tk) rec.tank=tk;
+    setRunTanks(rec,[...$("#rtanks",body).children].map(row=>({
+      tank:row.querySelector(".rtk").value,
+      litres:num(row.querySelector(".rtl").value)})));
     if(!rec.packDate||!rec.units){flash("A run needs a pack date and a quantity");return false;}
     const p=P(rec.productId)||{};
     /* a brew date typed in stands; left alone it follows the product's lead time */
@@ -2921,6 +2941,39 @@ function newRun(sku,packDate,units,existing){
     if(i>=0) S.runs[i]=rec; else S.runs.push(rec);
     persist("runs",rec); flash("Run saved — the coldroom forecast has moved");
   },existing?"Save":"Schedule");
+}
+/* the volume the dialog is working with, from whatever is typed in it now */
+function brewVolFrom(b){
+  const pid=$("#rp",b).value, pack=$("#rk",b).value;
+  const u=num($("#ra",b).value)!=null?num($("#ra",b).value):(num($("#ru",b).value)||0);
+  return u*litresPerUnit(pid,pack)/yieldOf(pid,pack);
+}
+/* what this run is, in litres: what comes out packaged, what has to go in the
+   tank to get it, and whether the tanks named add up to that */
+function volNote(b){
+  const n=$("#rvol",b); if(!n) return;
+  const pid=$("#rp",b).value, pack=$("#rk",b).value;
+  const u=num($("#ra",b).value)!=null?num($("#ra",b).value):(num($("#ru",b).value)||0);
+  const packaged=u*litresPerUnit(pid,pack), brew=brewVolFrom(b);
+  const rows=$("#rtanks",b)?[...$("#rtanks",b).children]:[];
+  const inTanks=sum(rows.map(x=>num(x.querySelector(".rtl").value)||0));
+  const short=Math.round(brew-inTanks);
+  clear(n);
+  n.append(el("b",{},n0(packaged)+" L packaged"),
+    " from "+n0(brew)+" L in tank, at "+Math.round(yieldOf(pid,pack)*100)+"% yield "
+    +"("+n1(litresPerUnit(pid,pack))+" L per "+(PACK_UNIT[pack]||"unit").toLowerCase().replace(/s$/,"")+")");
+  if(rows.length&&inTanks>0){
+    n.append(el("div",{class:"hint",style:short>1?"color:var(--warn)":short<-1?"color:var(--warn)":""},
+      short>1?(n0(inTanks)+" L allocated — "+n0(short)+" L still has nowhere to go")
+      :short<-1?(n0(inTanks)+" L allocated — "+n0(-short)+" L more than the brew")
+      :(n0(inTanks)+" L allocated, which is all of it")));
+  }
+  /* a tank that can't hold what is being put in it */
+  for(const row of rows){
+    const t=tankOf(row.querySelector(".rtk").value), v=num(row.querySelector(".rtl").value)||0;
+    if(t&&v>t.cap+0.5) n.append(el("div",{class:"hint",style:"color:var(--crit)"},
+      t.name+" holds "+n0(t.cap)+" L — "+n0(v)+" L won't fit"));
+  }
 }
 function syncBrew(b,fromBrew){
   const p=P($("#rp",b).value)||{brewToPackDays:21};
