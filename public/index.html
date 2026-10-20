@@ -386,7 +386,7 @@ dialog footer{padding:12px 16px;border-top:1px solid var(--line-soft);display:fl
 /* Which build this is. It shows at the bottom of the sidebar and on Setup, so
    there is never any doubt about whether a deploy actually landed: if the
    stamp hasn't changed after deploying, the browser is still on the old file. */
-const BUILD="2026-10-20e · non-core range screen";
+const BUILD="2026-10-20f · part kegs, non-core range screen";
 /* ============================ helpers ============================ */
 const $ = (s,r)=> (r||document).querySelector(s);
 const el = (t,a,...k)=>{const n=document.createElement(t);
@@ -416,6 +416,15 @@ const fmtD=s=>s?fmtWY(s):"—";
 const n0=v=>v==null||!isFinite(v)?"":Math.round(v).toLocaleString();
 const n1=v=>v==null||!isFinite(v)?"":(Math.round(v*10)/10).toLocaleString();
 const num=v=>{const x=parseFloat(String(v??"").replace(/,/g,""));return isFinite(x)?x:null;};
+/* A quantity of stock. Whole numbers print as whole numbers; a part keg —
+   the taproom going through a quarter of one a week — keeps its decimals
+   rather than rounding away to nothing. */
+const nq=v=>{
+  if(v==null||!isFinite(v)) return "";
+  const r=Math.round(v*100)/100;
+  if(Math.abs(r-Math.round(r))<0.005) return Math.round(r).toLocaleString();
+  return r.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+};
 const sum=a=>a.reduce((x,y)=>x+(y||0),0);
 const addMonths=(s,m)=>{const x=D(s);const d=x.getUTCDate();x.setUTCDate(1);x.setUTCMonth(x.getUTCMonth()+m);
   x.setUTCDate(Math.min(d,new Date(Date.UTC(x.getUTCFullYear(),x.getUTCMonth()+1,0)).getUTCDate()));return iso(x);};
@@ -900,7 +909,26 @@ function keyScreen(){
 <script>
 "use strict";
 /* ============================ forecast engine ============================ */
-function roundTo(v,m){ if(!m||m<=1) return Math.max(0,Math.round(v)); return Math.max(0,Math.ceil(v/m)*m); }
+/* Rounding a quantity. An order multiple always rounds up to it. Otherwise a
+   whole unit, unless the pack is sold in parts — the taproom going through a
+   quarter keg a week needs 0.25 to survive, not round away to nothing. */
+function roundTo(v,m,part){
+  if(m&&m>1) return Math.max(0,Math.ceil(v/m)*m);
+  if(part) return Math.max(0,Math.round(v*100)/100);
+  return Math.max(0,Math.round(v));
+}
+/* Can this pack be counted in parts? Kegs can unless a product says otherwise;
+   cartons can't unless one says they can. */
+function qfmt(skuId){
+  const pid=String(skuId||"").split("__")[0];
+  const pack=(skus().find(x=>x.id===skuId)||{}).pack;
+  return partUnits(pid,pack)?nq:n0;
+}
+function partUnits(productId,pack){
+  const q=packSpec(productId,pack);
+  if(q&&q.partUnits!=null) return !!q.partUnits;
+  return pack==="Keg"||pack==="30L Keg";
+}
 
 /* A new beer has no history of its own, so it can be modelled on one that has:
    same week last year from the reference SKU, scaled, optionally reading a
@@ -1104,6 +1132,8 @@ function beerInFor(sku,weeks){
 
 function compute(sku){
   const cfg=S.config, cw=cfg.currentWeek;
+  /* kegs can go out in parts; cartons can't, unless Setup says so */
+  const part=partUnits(sku.split("__")[0],(skus().find(x=>x.id===sku)||{}).pack);
   const weeks=[]; for(let i=1;i<=cfg.horizon;i++) weeks.push(wkAdd(cw,i));
   const past=[]; for(let i=cfg.past;i>=0;i--) past.push(wkAdd(cw,-i));
   const pl=planOf(sku);
@@ -1172,7 +1202,7 @@ function compute(sku){
     if(method==="planned") planNow=num(planned[cw])!=null?num(planned[cw]):0;
     else if(num(override[cw])!=null) planNow=num(override[cw]);
     else if(method==="direct") planNow=num(manual[cw])!=null?num(manual[cw]):0;
-    else planNow=soh<target?roundTo(target-soh,mult):0;
+    else planNow=soh<target?roundTo(target-soh,mult,part):0;
     const sohArr=[],shipArr=[];
     for(let k=0;k<weeks.length;k++){
       const arriving = k>=lead ? shipArr[k-lead]
@@ -1190,7 +1220,7 @@ function compute(sku){
            weeks to arrive, so it lands against a week more drawdown — that gap
            is what the target's cover is for, rather than something to inflate
            the order with. */
-        if(soh<target) ship=roundTo(target-soh,mult);
+        if(soh<target) ship=roundTo(target-soh,mult,part);
       }
       sohArr.push(soh); shipArr.push(ship);
     }
@@ -1571,6 +1601,7 @@ function visibleSkus(){
 }
 
 function skuGrid(s,c){
+  const F=qfmt(s.id);
   const wrap=el("div",{class:"gridwrap",id:"sku-"+s.id,"data-open":String(!!S.open[s.id])});
   const sev=c.stockoutWeek?(wkDiff(S.config.currentWeek,c.stockoutWeek)<=4?"crit":"warn"):"ok";
   const head=el("header",{onclick:()=>{S.open[s.id]=!S.open[s.id];render();}},
@@ -1579,7 +1610,7 @@ function skuGrid(s,c){
     el("h3",{},s.product.name,el("span",{},s.pack)),
     el("span",{class:"chip "+(sev==="crit"?"crit":sev==="warn"?"warn":"ok")},
       c.stockoutWeek?("Runs out "+fmtD(c.stockoutWeek)):"Covered "+S.config.horizon+" wks"),
-    el("span",{class:"chip"},"Coldroom "+n0(c.openCold)+" "+(PACK_UNIT[s.pack]||"").toLowerCase()),
+    el("span",{class:"chip"},"Coldroom "+F(c.openCold)+" "+(PACK_UNIT[s.pack]||"").toLowerCase()),
     el("span",{class:"chip"},(c.cover[0]!=null?n1(c.cover[0]):"—")+" wks cover"),
     el("span",{class:"spacer",style:"flex:1"}),
     el("span",{class:"hint"},n0(c.wkAvg)+"/wk out"),
@@ -1638,7 +1669,7 @@ function skuGrid(s,c){
   const NP=c.past.length;
 
   const vcell=(v,i,cls)=>{const td=el("td",{class:"v "+(i<NP?"past ":"")+(cls||"")});
-    td.textContent=v==null?"·":n0(v);return td;};
+    td.textContent=v==null?"·":F(v);return td;};
 
   for(const r of c.rows){
     tb.append(el("tr",{class:"sep"},el("td",{colspan:axis.length+1})));
@@ -1686,7 +1717,7 @@ function skuGrid(s,c){
       l3.append(el("div",{class:"lbl"},el("span",{style:"padding-left:22px"},"Their SOH"),ms,
         el("button",{class:"btn sm",style:"padding:1px 5px",
           title:"The stock on hand we top "+r.loc.name+" up to — click to set it for this SKU",
-          onclick:()=>editTarget(s,r)},"tgt "+n0(r.target)),
+          onclick:()=>editTarget(s,r)},"tgt "+F(r.target)),
         r.lastPlanned?el("span",{class:"hint",style:"color:var(--accent-ink)",
           title:"Their order plan runs to "+fmtD(r.lastPlanned)+", then this channel tops up to target"},
           "plan → "+fmtW(r.lastPlanned)):null));
@@ -1741,13 +1772,13 @@ function skuGrid(s,c){
     td.append(el("button",{class:"btn sm",style:"padding:1px 5px",
       title:actual?"What was packaged that week — click to correct it"
                   :"Planned for this week — click to enter what actually came off the line",
-      onclick:()=>editRunsForWeek(s.id,wk)},n0(shown)));
+      onclick:()=>editRunsForWeek(s.id,wk)},F(shown)));
     trB.append(td);
   });
   c.beerIn.forEach((v,i)=>{
     const td=el("td",{class:"v"+(v>0?"":" past")});
     if(v>0){td.append(el("button",{class:"btn sm",style:"padding:1px 5px",
-      onclick:()=>editRunsForWeek(s.id,c.weeks[i])},n0(v)));}
+      onclick:()=>editRunsForWeek(s.id,c.weeks[i])},F(v)));}
     else{td.textContent="·";td.style.cursor="pointer";td.title="Schedule a packaging run";
       td.onclick=()=>newRun(s.id,c.weeks[i]);}
     trB.append(td);
@@ -1899,10 +1930,11 @@ function drawCell(sku,r,wk,computed){
   const pl=planOf(sku);
   const cur=(pl.manual&&pl.manual[r.loc.id]||{})[wk];
   const set=cur!=null&&(r.basis==="manual"||r.basis==="flat");
+  const F=qfmt(sku);
   const td=el("td",{class:"v inp"+(set?" edited":"")});
-  td.append(el("input",{type:"text",inputmode:"numeric",value:set?n0(cur):"",
+  td.append(el("input",{type:"text",inputmode:"decimal",value:set?F(cur):"",
     "data-k":"draw|"+sku+"|"+r.loc.id+"|"+wk,
-    placeholder:n0(computed)||"0",
+    placeholder:F(computed)||"0",
     title:"What we expect "+r.loc.name+" to draw down. "+(BASIS_HINT[r.basis]||""),
     onchange:e=>setDraw(sku,r,wk,e.target.value)}));
   return td;
@@ -1920,13 +1952,14 @@ function setDraw(sku,r,wk,val){
    greyed is carried forward from the last real one until the week's lands. A
    location that was counted is not typeable: its count is the better number. */
 function sohNowCell(sku,r,wk,isNow){
+  const F=qfmt(sku);
   const stored=at(sku,"soh",histLoc(sku,"soh",r.loc.id),wk);
   const est=stored==null?estimateSOH(sku,r.loc.id,wk):null;
   const td=el("td",{class:"v inp"+(isNow?" now":"")+(stored!=null?" edited":"")});
-  td.append(el("input",{type:"text",inputmode:"numeric",
-    value:stored!=null?n0(stored):"",
+  td.append(el("input",{type:"text",inputmode:"decimal",
+    value:stored!=null?F(stored):"",
     "data-k":"soh|"+sku+"|"+r.loc.id+"|"+wk,
-    placeholder:est==null?"—":n0(est),
+    placeholder:est==null?"—":F(est),
     title:stored!=null?("What "+r.loc.name+" reported holding this week")
       :("Carried forward — type what "+r.loc.name+" reports and this week's drawdown becomes exact"),
     onchange:e=>{setTheirSOH(sku,r.loc.id,wk,e.target.value);reflow();}}));
@@ -1940,13 +1973,14 @@ function nowCell(sku,r,wk,v,isNow){
   /* until the actual is typed, this week shows what is planned to go out —
      greyed, so it reads as a plan, and the coldroom is working off the same
      figure rather than off nothing */
+  const F=qfmt(sku);
   const plan=isNow&&v==null&&r.planNow!=null?r.planNow:null;
   const td=el("td",{class:"v inp"+(isNow?" now":"")+(v!=null?" edited":plan!=null?" plan":"")});
-  td.append(el("input",{type:"text",inputmode:"numeric",value:v==null?"":n0(v),
+  td.append(el("input",{type:"text",inputmode:"decimal",value:v==null?"":F(v),
     "data-k":"out|"+sku+"|"+r.loc.id+"|"+wk,
-    placeholder:plan!=null?n0(plan):"—",
+    placeholder:plan!=null?F(plan):"—",
     title:isNow?("Going out to "+r.loc.name+" this week"
-          +(plan!=null?" — planned "+n0(plan)+", type the figure to confirm it":". Saved as the week's actual."))
+          +(plan!=null?" — planned "+F(plan)+", type the figure to confirm it":". Saved as the week's actual."))
                :("What actually went to "+r.loc.name+" last week"),
     onchange:e=>{setActual(sku,r.loc.id,wk,e.target.value);reflow();}}));
   return td;
@@ -1961,17 +1995,18 @@ function shipCell(sku,r,wk,computed){
   const field=shipField(r.method), pl=planOf(sku);
   const cur=(pl[field]&&pl[field][r.loc.id]||{})[wk];
   const set=cur!=null;
+  const F=qfmt(sku);
   const td=el("td",{class:"v inp"+(set?" edited":"")});
-  const inp=el("input",{type:"text",inputmode:"numeric",value:set?n0(cur):"",
+  const inp=el("input",{type:"text",inputmode:"decimal",value:set?F(cur):"",
     "data-k":"ship|"+sku+"|"+r.loc.id+"|"+wk,
-    placeholder:n0(computed)||"0",
+    placeholder:F(computed)||"0",
     title:r.method==="planned"
       ?(r.lastPlanned&&wk>r.lastPlanned
-          ?"Their order plan ends "+fmtD(r.lastPlanned)+" — topping up to "+n0(r.target)+" from here. Type a figure to extend the plan."
+          ?"Their order plan ends "+fmtD(r.lastPlanned)+" — topping up to "+F(r.target)+" from here. Type a figure to extend the plan."
           :"What they've told us they're ordering")
       :r.method==="target_soh"
         ?(set?"Known order — clear this to go back to topping up to target"
-            :"Topping up to "+n0(r.target)+". Type a figure if you already know what's going.")
+            :"Topping up to "+F(r.target)+". Type a figure if you already know what's going.")
         :"What we plan to send. Type a figure to fix it.",
     onchange:e=>setShip(sku,r,wk,e.target.value)});
   td.append(inp); return td;
@@ -2193,11 +2228,12 @@ function viewStocktake(pane,ctl){
     const body=el("tbody");
     for(const e of rows){
       if(stRecountOnly&&!needsRecount(e)) continue;
+      const F=partUnits(e.productId,e.pack)?nq:n0;
       const sm=shelfMonths(e.productId,e.pack);
       const sb=e.bestBefore?iso(new Date(D(e.bestBefore)-Math.round(sm/2*30.44)*DAY)):null;
       const d=sb?dDiff(S.config.currentWeek,sb):null;
       const qty=el("input",{class:"cellinp num qty",type:"text",inputmode:"decimal",
-        value:e.qty!=null?n0(e.qty):"", placeholder:"—",
+        value:e.qty!=null?F(e.qty):"", placeholder:"—",
         title:"Leave blank until it's counted; type 0 for a bay with none in it",
         onfocus:ev=>ev.target.select(),
         onkeydown:ev=>stepCell(ev),
@@ -2211,7 +2247,7 @@ function viewStocktake(pane,ctl){
       const ar=areaCell(st,e);
       /* what the ERP says it holds, against what was counted */
       const erp=el("input",{class:"cellinp num",type:"text",inputmode:"decimal",
-        value:e.erp!=null?n0(e.erp):"",placeholder:"—",
+        value:e.erp!=null?F(e.erp):"",placeholder:"—",
         title:"What the ERP says for this batch",
         onfocus:ev=>ev.target.select(), onkeydown:ev=>stepCell(ev),
         onchange:ev=>{const v=num(ev.target.value); if(v==null) delete e.erp; else e.erp=v;
@@ -2238,10 +2274,10 @@ function viewStocktake(pane,ctl){
         el("td",{class:"dim"},e.pack),
         el("td",{class:"cell"},bat),
         el("td",{class:"cell"},ar),
-        el("td",{class:"num dim",title:"Counted in the previous stocktake"},prev==null?"—":n0(prev)),
+        el("td",{class:"num dim",title:"Counted in the previous stocktake"},prev==null?"—":F(prev)),
         el("td",{class:"cell"},qty),
         el("td",{class:"cell"},erp),
-        el("td",{class:"num"+(diff?" neg":"")},diff==null?"—":(diff>0?"+":"")+n0(diff)),
+        el("td",{class:"num"+(diff?" neg":"")},diff==null?"—":(diff>0?"+":"")+F(diff)),
         el("td",{class:"cell"},note),
         el("td",{class:"cell mid"},rc),
         el("td",{class:"cell"},bb),
@@ -2658,7 +2694,7 @@ function layoutBars(l,items,weeks,wkIx,tank){
            +(ends.length>1?"top:"+(3+x.lane*26)+"px;height:22px;bottom:auto;":"")
            +"background:"+brandColour(r.productId)});
     const split=runTanks(r);
-    bar.title=(P(r.productId)||{}).name+" "+r.pack+" · "+n0(runUnits(r))+" "
+    bar.title=(P(r.productId)||{}).name+" "+r.pack+" · "+(partUnits(r.productId,r.pack)?nq:n0)(runUnits(r))+" "
       +(PACK_UNIT[r.pack]||"units").toLowerCase()+"\n"
       +n0(brewLitres(r))+" L to brew"
       +(split.length>1?", split across "+split.map(y=>y.tank+" "+n0(y.litres)+" L").join(" + "):"")
@@ -2803,7 +2839,7 @@ function brandOutlook(pane,all){
       r.packed.forEach((v,i)=>{
         const td=el("td",{class:"v"+(v>0?"":" past")});
         if(v>0){ td.append(el("button",{class:"btn sm",style:"padding:1px 5px",
-          onclick:()=>editRunsForWeek(r.s.id,weeks[i])},n0(v))); }
+          onclick:()=>editRunsForWeek(r.s.id,weeks[i])},qfmt(r.s.id)(v))); }
         else { td.textContent="·"; td.style.cursor="pointer";
           td.title="Schedule a run"; td.onclick=()=>newRun(r.s.id,weeks[i]); }
         tr1.append(td);
@@ -2814,7 +2850,7 @@ function brandOutlook(pane,all){
         el("span",{style:"padding-left:18px;color:var(--muted)"},"coldroom, end of week"))));
       r.endSoh.forEach((v,i)=>{
         const td=el("td",{class:"v"+(v==null?" past":v<0?" neg":"")});
-        td.textContent=v==null?"·":n0(v);
+        td.textContent=v==null?"·":qfmt(r.s.id)(v);
         tr2.append(td);
       });
       body.append(tr2);
@@ -2904,7 +2940,7 @@ function viewProduction(pane,ctl){
         el("td",{class:"mono"},el("b",{},fmtD(r.packDate))),
         el("td",{class:"mono dim"},"w/c "+fmtW(monday(r.packDate))),
         el("td",{},p.name),el("td",{class:"dim"},r.pack),
-        el("td",{class:"num"},n0(r.units)),
+        el("td",{class:"num"},(partUnits(r.productId,r.pack)?nq:n0)(r.units)),
         el("td",{class:"num dim"},n0(litres(r))),
         el("td",{},el("span",{class:"chip "+(r.status==="confirmed"?"ok":"warn")},r.status||"planned")),
         el("td",{},el("button",{class:"btn sm",onclick:()=>newRun(skuId(r.productId,r.pack),null,null,r)},"Edit"))));
@@ -3076,7 +3112,7 @@ function editRunsForWeek(sku,week){
     const body=el("tbody");
     for(const r of rs){
       const inp=el("input",{class:"cellinp num",type:"number",step:"0.5",
-        value:r.actualUnits!=null?r.actualUnits:"",placeholder:n0(r.units),
+        value:r.actualUnits!=null?r.actualUnits:"",placeholder:(partUnits(r.productId,r.pack)?nq:n0)(r.units),
         onchange:e=>{
           const v=num(e.target.value);
           if(v==null) delete r.actualUnits; else r.actualUnits=v;
@@ -3085,7 +3121,7 @@ function editRunsForWeek(sku,week){
         }});
       body.append(el("tr",{},
         el("td",{class:"mono"},fmtD(r.packDate)),
-        el("td",{class:"num dim"},n0(r.units)),
+        el("td",{class:"num dim"},(partUnits(r.productId,r.pack)?nq:n0)(r.units)),
         el("td",{class:"cell"},inp),
         el("td",{},el("button",{class:"btn sm",type:"button",
           onclick:()=>{$("#dlg").close();newRun(sku,null,null,r);}},"Edit run"))));
@@ -3916,12 +3952,19 @@ function editProduct(p){
       const ef=el("input",{type:"number",id:"ef-"+slug(code),step:"1",min:"1",max:"100",style:"width:64px",
         value:(q&&q.efficiency!=null)?q.efficiency:90,
         title:"How much of what goes into the tank ends up packaged"});
+      /* part units: a taproom that pours a quarter keg a week needs 0.25 to
+         mean something rather than rounding to nothing */
+      const pu=el("input",{type:"checkbox",id:"pu-"+slug(code),
+        checked:(q&&q.partUnits!=null)?!!q.partUnits:(code==="Keg"||code==="30L Keg"),
+        title:"Allow part units — 0.25 of a keg, say"});
       pk.append(el("div",{class:"row",style:"align-items:center;gap:6px"},
         el("label",{class:"row",style:"align-items:center;gap:7px;min-width:118px"},on,el("span",{},code)),
         el("span",{class:"hint"},"shelf"),sh,el("span",{class:"hint"},"m"),
         el("span",{class:"hint",style:"margin-left:6px"},"litres"),lt,
         el("span",{class:"hint"},"per "+(PACK_UNIT[code]||"unit").toLowerCase().replace(/s$/,"")),
-        el("span",{class:"hint",style:"margin-left:6px"},"yield"),ef,el("span",{class:"hint"},"%")));
+        el("span",{class:"hint",style:"margin-left:6px"},"yield"),ef,el("span",{class:"hint"},"%"),
+        el("label",{class:"row",style:"align-items:center;gap:5px;margin-left:8px"},
+          pu,el("span",{class:"hint"},"part units"))));
     }
     b.append(pk);
     b.append(el("div",{class:"note"},"Send-by is best before minus half the shelf life set here, ",
@@ -3943,6 +3986,7 @@ function editProduct(p){
       shelfLifeMonths:num($("#sh-"+slug(c),body).value)||PACK_SHELF[c],
       litres:num($("#lt-"+slug(c),body).value)||LPU[c]||0,
       efficiency:Math.min(100,Math.max(1,num($("#ef-"+slug(c),body).value)||90)),
+      partUnits:$("#pu-"+slug(c),body).checked,
       active:true}));
     rec.colour=$("#pc",body)?$("#pc",body).value:rec.colour;
     if(isNew) S.products.push(rec);
@@ -4084,7 +4128,7 @@ function editTarget(s,r){
   const unit=(PACK_UNIT[s.pack]||"units").toLowerCase();
   openDialog("Top-up target — "+s.product.name+" "+s.pack+" at "+r.loc.name,b=>{
     b.append(el("div",{class:"note"},
-      "We top this channel up to ",el("b",{},n0(r.target)+" "+unit),
+      "We top this channel up to ",el("b",{},qfmt(s.id)(r.target)+" "+unit),
       " — they draw about ",el("b",{},n0(r.avg)+" "+unit+" a week"),
       ", so that is ",el("b",{},n1(r.avg>0?r.target/r.avg:0)+" weeks")," of cover. ",
       "Leave both boxes empty to follow the channel's own setting of "+n1(locWeeks)+" weeks."));
@@ -4093,7 +4137,7 @@ function editTarget(s,r){
         value:curW!=null?curW:"",placeholder:n1(locWeeks)}),
         "Moves with their drawdown"),
       field("Or a fixed figure",el("input",{type:"number",id:"tu",step:"1",min:"0",
-        value:curU!=null&&curU!==""?curU:"",placeholder:"e.g. "+n0(r.target)}),
+        value:curU!=null&&curU!==""?curU:"",placeholder:"e.g. "+qfmt(s.id)(r.target)}),
         unit.charAt(0).toUpperCase()+unit.slice(1)+" — wins over the weeks")));
     const out=el("div",{class:"hint"},"");
     const redraw=()=>{
