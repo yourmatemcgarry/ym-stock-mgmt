@@ -386,7 +386,7 @@ dialog footer{padding:12px 16px;border-top:1px solid var(--line-soft);display:fl
 /* Which build this is. It shows at the bottom of the sidebar and on Setup, so
    there is never any doubt about whether a deploy actually landed: if the
    stamp hasn't changed after deploying, the browser is still on the old file. */
-const BUILD="2026-10-20f · part kegs, non-core range screen";
+const BUILD="2026-10-21 · packaging quantity on the tank bars";
 /* ============================ helpers ============================ */
 const $ = (s,r)=> (r||document).querySelector(s);
 const el = (t,a,...k)=>{const n=document.createElement(t);
@@ -432,6 +432,9 @@ const addMonths=(s,m)=>{const x=D(s);const d=x.getUTCDate();x.setUTCDate(1);x.se
 const PACKS=["Can","10 Pack","Keg","30L Keg"];
 const PACK_UNIT={"Can":"Cartons","10 Pack":"Cartons","Keg":"50L Kegs","30L Keg":"30L Kegs"};
 const PACK_SHELF={"Can":12,"10 Pack":12,"Keg":6,"30L Keg":6};
+/* short enough to sit on a bar on the tank board */
+const PACK_SHORT={"Can":"ctn","10 Pack":"ctn","Keg":"kegs","30L Keg":"30L kegs"};
+const packShort=p=>PACK_SHORT[p]||"units";
 /* litres in one unit, before a product sets its own */
 const LPU={"Can":24*0.375,"10 Pack":10*0.375,"Keg":50,"30L Keg":30};
 const BASES={prior_year:"Prior year",recent_avg:"Recent average",manual:"Manual entry",
@@ -2699,10 +2702,22 @@ function layoutBars(l,items,weeks,wkIx,tank){
       +n0(brewLitres(r))+" L to brew"
       +(split.length>1?", split across "+split.map(y=>y.tank+" "+n0(y.litres)+" L").join(" + "):"")
       +"\n"+fmtD(brewStart(r))+" → "+fmtD(r.packDate)
-      +(tank?"\n"+n0(x.litres)+" L in "+tank.name:"\nNot in a tank yet")
+      +(tank?"\n"+n0(x.litres)+" L in "+tank.name
+            +(split.length>1?" — packages "+(partUnits(r.productId,r.pack)?nq:n0)(
+                runUnits(r)*(brewLitres(r)>0?x.litres/brewLitres(r):1))+" "+packShort(r.pack):"")
+            :"\nNot in a tank yet")
       +(over?"\nMore than this tank's "+n0(tank.cap)+" L":"");
     bar.append(el("span",{class:"grab l"}));
-    bar.append(el("span",{class:"lab"},(P(r.productId)||{}).name+" "+r.pack+" · "+kl(x.litres)+"L"));
+    /* what this tank's share will package. A brew split across tanks shows
+       each tank's share, so the two bars add up to the run rather than each
+       claiming the whole of it. */
+    const whole=brewLitres(r)||0;
+    const share=whole>0?Math.min(1,x.litres/whole):1;
+    const units=runUnits(r)*share;
+    const uf=partUnits(r.productId,r.pack)?nq:n0;
+    bar.append(el("span",{class:"lab"},
+      (P(r.productId)||{}).name+" "+r.pack+" · "
+      +uf(units)+" "+packShort(r.pack)+" · "+kl(x.litres)+"L"));
     bar.append(el("span",{class:"grab r"}));
     bar.addEventListener("dblclick",ev=>{ev.stopPropagation();newRun(null,null,null,r);});
     bar.addEventListener("pointerdown",ev=>tankDrag(ev,r,x.tank,x.litres));
