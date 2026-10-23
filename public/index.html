@@ -90,6 +90,23 @@ table.mini th{text-align:left;font:600 10px/1.4 var(--sans);letter-spacing:.06em
 table.mini td{padding:4px 6px;border-bottom:1px solid var(--line-soft)}
 table.mini td.num,table.mini th.num{text-align:right;font-family:var(--mono)}
 .fg td.ret{color:var(--warn);font-weight:600}
+/* ---- a note on a cell ----
+   A corner flag, and nothing else, until it is clicked. */
+.notemark{position:absolute;top:0;right:0;width:0;height:0;z-index:3;cursor:pointer;
+  border:5px solid transparent;border-top-color:var(--accent);border-right-color:var(--accent)}
+.fg td.hasnote input{background:linear-gradient(to bottom left,var(--accent-soft) 0 9px,transparent 9px)}
+.notepop{position:fixed;z-index:60;width:268px;background:var(--surface);
+  border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);
+  padding:9px;display:flex;flex-direction:column;gap:7px}
+.notepop textarea{width:100%;resize:vertical;font:inherit;font-size:12.5px;
+  background:var(--sunk);border:1px solid var(--line);border-radius:5px;padding:6px}
+/* the week being worked on, highlighted down the whole column */
+.fg td.nowcol{background:var(--warn-soft)}
+.fg th.wkh.nowcol{background:var(--warn-soft);color:var(--warn)}
+.fg th.wkh.nowcol b{color:var(--warn)}
+.fg td.inp.nowcol input{background:transparent}
+.fg td.inp.nowcol.edited input{background:var(--accent-soft)}
+.fg td.adj{color:var(--accent-ink);font-weight:600}
 /* a figure that is still the plan, not an actual */
 .fg td.plan{color:var(--muted);font-style:italic}
 .fg td.inp.plan input::placeholder{color:var(--muted);opacity:1;font-style:italic}
@@ -250,7 +267,7 @@ tbody tr:last-child td{border-bottom:0}
 .fg{font-size:12.5px}
 .fg th,.fg td{padding:5px 8px;border-bottom:1px solid var(--line-soft);border-right:1px solid var(--line-soft)}
 .fg thead th{background:var(--surface-2);position:sticky;top:0;z-index:6}
-.fg .stick{position:sticky;left:0;z-index:4;background:var(--surface);min-width:246px;max-width:246px;
+.fg .stick{position:sticky;left:0;z-index:4;background:var(--surface);min-width:306px;max-width:306px;
   border-right:1px solid var(--line);overflow:hidden;text-overflow:ellipsis}
 .fg thead .stick{z-index:8;background:var(--surface-2)}
 .fg tbody tr:hover .stick{background:var(--surface-2)}
@@ -386,7 +403,7 @@ dialog footer{padding:12px 16px;border-top:1px solid var(--line-soft);display:fl
 /* Which build this is. It shows at the bottom of the sidebar and on Setup, so
    there is never any doubt about whether a deploy actually landed: if the
    stamp hasn't changed after deploying, the browser is still on the old file. */
-const BUILD="2026-10-21 · packaging quantity on the tank bars";
+const BUILD="2026-10-23b · adjustments, repacks, the week in view";
 /* ============================ helpers ============================ */
 const $ = (s,r)=> (r||document).querySelector(s);
 const el = (t,a,...k)=>{const n=document.createElement(t);
@@ -641,6 +658,45 @@ function rebuildReturns(sku,save){
   for(const wk of weeks) for(const l of activeLocs()) deriveUsed(sku,l.id,wk);
   S.calcCache=null;
   if(save){ persist("plan",pl); persist("history",stripIx(h)); }
+}
+/* ---- coldroom adjustments ----
+   Everything that moves stock in or out of the coldroom without being a
+   packaging run, a shipment or a return: beer invoiced on Friday that is still
+   on the floor Monday, a pallet written off, a repack from 50L into 30L. Each
+   one is a quantity against a week with a reason, and a repack is simply two
+   of them — out of one SKU, into another — tied together. */
+function adjustments(sku){ return planOf(sku).adjust||[]; }
+function adjustAt(sku,wk){ return sum(adjustments(sku).filter(a=>a.wk===wk).map(a=>num(a.qty)||0)); }
+function addAdjust(sku,rec){
+  const pl=planOf(sku);
+  pl.adjust=pl.adjust||[];
+  pl.adjust.push(Object.assign({id:uid("adj")},rec));
+  persist("plan",pl); S.calcCache=null;
+}
+function dropAdjust(sku,id){
+  const pl=planOf(sku);
+  const gone=(pl.adjust||[]).find(a=>a.id===id);
+  pl.adjust=(pl.adjust||[]).filter(a=>a.id!==id);
+  persist("plan",pl);
+  /* a repack has a matching half on the other SKU: take that with it */
+  if(gone&&gone.link){
+    for(const s of skus()){
+      const other=planOf(s.id);
+      if(!other.adjust) continue;
+      const n=other.adjust.length;
+      other.adjust=other.adjust.filter(a=>a.link!==gone.link);
+      if(other.adjust.length!==n) persist("plan",other);
+    }
+  }
+  S.calcCache=null;
+}
+/* one lot of beer becoming another: 6 × 50L into 10 × 30L */
+function repack(fromSku,fromQty,toSku,toQty,wk,note){
+  const link=uid("rp");
+  const text=note||("Repacked into "+skuLabel(toSku));
+  addAdjust(fromSku,{wk,qty:-Math.abs(fromQty),note:text,link,kind:"repack"});
+  addAdjust(toSku,{wk,qty:Math.abs(toQty),
+    note:note||("Repacked from "+skuLabel(fromSku)),link,kind:"repack"});
 }
 function addReturn(sku,rec){
   const pl=planOf(sku);
@@ -1257,8 +1313,12 @@ function compute(sku){
   /* both ends of each week: what's in the coldroom on the Monday, and what's
      left after that week's packaging and shipments. The pair is what says
      whether a week can be got through, not just which week ends short. */
-  const cold=[], coldStart=[]; let c=openCold+inNow+backNow-outNow;
-  for(let k=0;k<weeks.length;k++){ coldStart.push(c); c=c+beerIn[k]-totalShip[k]; cold.push(c); }
+  /* anything moved in or out by hand: this week's lands before the first
+     forecast week, the rest sit in the week they are dated */
+  const adjNow=adjustAt(sku,cw);
+  const adjFwd=weeks.map(w=>adjustAt(sku,w));
+  const cold=[], coldStart=[]; let c=openCold+inNow+backNow+adjNow-outNow;
+  for(let k=0;k<weeks.length;k++){ coldStart.push(c); c=c+beerIn[k]+adjFwd[k]-totalShip[k]; cold.push(c); }
   const wkAvg=sum(totalShip)/Math.max(1,totalShip.length);
   const cover=cold.map(v=>wkAvg>0?v/wkAvg:null);
   let stockoutWeek=null;
@@ -1268,6 +1328,7 @@ function compute(sku){
   const brewBy=stockoutWeek?iso(new Date(D(stockoutWeek)-lead*DAY)):null;
   const surplusTarget=(p&&p.surplusTarget&&p.surplusTarget[sku.split("__").slice(1).join("__")])||null;
   return {sku,weeks,past,rows,totalShip,beerIn,cold,coldStart,cover,openCold,inNow,outNow,backNow,
+    adjNow,adjFwd,pastAdj:past.map(w=>adjustAt(sku,w)||null),
     stockoutWeek,brewBy,wkAvg,surplusTarget,
     pastBack:past.map(w=>at(sku,"stockIn","returned",w)),
     pastRetTotal:past.map(w=>{const t=sum(activeLocs().map(l=>at(sku,"ret",l.id,w)||0));return t||null;}),
@@ -1418,8 +1479,9 @@ function uiRestore(st){
     try{ n.focus({preventScroll:true}); }catch(e){ n.focus(); }
   }
   if(n&&st.sel&&n.setSelectionRange){ try{ n.setSelectionRange(st.sel[0],st.sel[1]); }catch(e){} }
+  syncNew();
   window.scrollTo(0,st.y);
-  requestAnimationFrame(()=>{ if(seq!==_uiSeq) return; scrolls(); window.scrollTo(0,st.y); });
+  requestAnimationFrame(()=>{ if(seq!==_uiSeq) return; scrolls(); syncNew(); window.scrollTo(0,st.y); });
 }
 /* A cell's change event fires while the focus is still moving to the next one,
    so the redraw waits a tick — by then the new cell is focused and can be
@@ -1594,6 +1656,24 @@ function rangeOfView(){ return S.view==="noncore"?"noncore":"core"; }
 function skusInRange(which){
   return skus().filter(s=>isNonCore(s.product)===(which==="noncore"));
 }
+/* Every SKU's grid shares one week axis, so they share one sideways position:
+   scroll any of them and the rest follow, and the same column is the same week
+   all the way down the page. */
+let syncing=false, syncLeft=0;
+function syncAcross(from){
+  if(syncing) return;
+  syncing=true;
+  syncLeft=from.scrollLeft;
+  for(const d of document.querySelectorAll("#pane .scroll.wklock"))
+    if(d!==from&&d.scrollLeft!==syncLeft) d.scrollLeft=syncLeft;
+  requestAnimationFrame(()=>{syncing=false;});
+}
+/* a grid drawn after the others starts where they are */
+function syncNew(){
+  if(!syncLeft) return;
+  for(const d of document.querySelectorAll("#pane .scroll.wklock"))
+    if(d.scrollLeft!==syncLeft) d.scrollLeft=syncLeft;
+}
 function visibleSkus(){
   const which=rangeOfView();
   return skusInRange(which)
@@ -1629,6 +1709,22 @@ function skuGrid(s,c){
         onclick:ev=>{ev.stopPropagation();editGrowth(s);}},
         set.length?("vs last yr "+(set.length===1?n0(set[0].growth)+"%"
           :set.length+" set")):"vs last yr");})(),
+    (()=>{const n=adjustments(s.id).length;
+      return el("button",{class:"btn sm",style:"margin-left:6px",
+        title:"Move stock in or out by hand, or record a repack",
+        onclick:ev=>{ev.stopPropagation();editAdjust(s);}},
+        n?(n+" adjustment"+(n===1?"":"s")):"Adjust stock");})(),
+    (()=>{const bl=planOf(s.id).batches||{};
+      const n=Object.values(bl).reduce((a,w)=>a+Object.keys(w||{}).length,0);
+      return el("button",{class:"btn sm",style:"margin-left:6px",
+        title:"What each distributor is holding, worked out from the batches we sent and first-in-first-out",
+        onclick:ev=>{ev.stopPropagation();viewBatches(s);}},
+        n?("batches · "+n+" load"+(n===1?"":"s")):"Batches");})(),
+    (()=>{const n=Object.keys(planOf(s.id).notes||{}).length;
+      return el("button",{class:"btn sm",style:"margin-left:6px",
+        title:"Notes on cells — a PO against an order, an event. Right-click any cell to leave one.",
+        onclick:ev=>{ev.stopPropagation();listNotes(s);}},
+        n?(n+" note"+(n===1?"":"s")):"Notes");})(),
     (()=>{const n=returnsOf(s.id).length;
       return el("button",{class:"btn sm",style:"margin-left:6px",
         title:"Record stock sent back from a distributor, and where it ended up",
@@ -1661,17 +1757,22 @@ function skuGrid(s,c){
   const axis=[...c.past,...c.weeks], cwIdx=c.past.length-1;
   /* "tall" bounds the height so the week row has something to stick to: a
      short SKU is unaffected, a long one scrolls inside its own card with its
-     dates and channel names staying put */
-  const scroll=el("div",{class:"scroll tall"}), t=el("table",{class:"fg"});
+     dates and channel names staying put. "sync" keeps every SKU on the same
+     week, so scrolling one grid sideways moves them all and a column means
+     the same thing whichever beer you are looking at. ("sync" is taken by the
+     save indicator in the sidebar, hence the name.) */
+  const scroll=el("div",{class:"scroll tall wklock"}), t=el("table",{class:"fg"});
+  scroll.addEventListener("scroll",()=>syncAcross(scroll));
   const thead=el("thead"), hr=el("tr",{});
   hr.append(el("th",{class:"stick"},"Week commencing"));
-  axis.forEach((w,i)=>{const th=el("th",{class:"wkh"+(i===cwIdx?" now":"")},
+  axis.forEach((w,i)=>{const th=el("th",{class:"wkh"+(i===cwIdx?" now nowcol":"")},
     el("b",{},fmtW(w)),String(D(w).getUTCFullYear()).slice(2));th.title=w;hr.append(th);});
   thead.append(hr); t.append(thead);
   const tb=el("tbody");
   const NP=c.past.length;
 
-  const vcell=(v,i,cls)=>{const td=el("td",{class:"v "+(i<NP?"past ":"")+(cls||"")});
+  const vcell=(v,i,cls)=>{const td=el("td",{class:"v "+(i<NP?"past ":"")
+    +(i===cwIdx?"nowcol ":"")+(cls||"")});
     td.textContent=v==null?"·":F(v);return td;};
 
   for(const r of c.rows){
@@ -1697,8 +1798,11 @@ function skuGrid(s,c){
     tr1.append(lab);
     /* the two live columns: last week, which is being tidied up on Monday
        morning, and this week, which is being decided on Monday afternoon */
+    /* a past load keeps its note and its batch codes: read-only, but the flag
+       stays on it and clicking still opens what was recorded */
     (r.pastOut||[]).forEach((v,i)=>tr1.append(
-      i>=cwIdx-1?nowCell(s.id,r,c.past[i],v,i===cwIdx):vcell(v,i)));
+      i>=cwIdx-1?nowCell(s.id,r,c.past[i],v,i===cwIdx)
+                :notable(vcell(v,i),s.id,"out|"+s.id+"|"+r.loc.id+"|"+c.past[i])));
     r.ship.forEach((v,i)=>tr1.append(shipCell(s.id,r,c.weeks[i],v)));
     tb.append(tr1);
     // their drawdown + SOH
@@ -1769,7 +1873,15 @@ function skuGrid(s,c){
     const wk=c.past[i], runs=runsInWeek(s.id,wk);
     const fromRuns=sum(runs.map(runUnits));
     const shown=v!=null?v:(runs.length?fromRuns:null);
-    if(!runs.length){ trB.append(vcell(shown,i)); return; }
+    if(!runs.length){
+      /* nothing was planned, but it got packaged anyway — click and say so */
+      const td=el("td",{class:"v past"+(i===cwIdx?" nowcol":"")});
+      td.textContent=shown==null?"·":F(shown);
+      td.style.cursor="pointer";
+      td.title="Nothing scheduled this week — click to record what was packaged";
+      td.onclick=()=>newRun(s.id,wk);
+      trB.append(td); return;
+    }
     const actual=v!=null||runs.some(r=>r.actualUnits!=null);
     const td=el("td",{class:"v past"+(actual?" edited":" plan")});
     td.append(el("button",{class:"btn sm",style:"padding:1px 5px",
@@ -1787,6 +1899,18 @@ function skuGrid(s,c){
     trB.append(td);
   });
   tb.append(trB);
+
+  /* stock moved by hand: a repack, a write-off, beer invoiced early */
+  if((c.pastAdj||[]).some(v=>v)||(c.adjFwd||[]).some(v=>v)){
+    const trA=el("tr",{});
+    trA.append(el("td",{class:"stick"},el("div",{class:"lbl"},
+      el("span",{class:"tag c"},"adj"),"Adjustments",
+      el("button",{class:"btn sm",style:"padding:0 5px",title:"Stock moved by hand",
+        onclick:()=>editAdjust(s)},"edit"))));
+    (c.pastAdj||[]).forEach((v,i)=>trA.append(vcell(v||null,i,v?"adj":"")));
+    (c.adjFwd||[]).forEach((v,i)=>trA.append(vcell(v||null,NP+i,v?"adj":"")));
+    tb.append(trA);
+  }
 
   /* only worth a row when something has actually come back */
   if((c.pastBack||[]).some(v=>v!=null&&v!==0)){
@@ -1813,7 +1937,7 @@ function skuGrid(s,c){
   const outAt=i=>(i===cwIdx?c.outNow:((c.pastTotalOut||[])[i]||0));
   const endOf=i=>{const s0=(c.pastCold||[])[i];
     if(s0==null) return null;
-    return s0+inAt(i)+((c.pastBack||[])[i]||0)-outAt(i);};
+    return s0+inAt(i)+((c.pastBack||[])[i]||0)+((c.pastAdj||[])[i]||0)-outAt(i);};
   const trC=el("tr",{class:"tot"});
   trC.append(el("td",{class:"stick"},el("div",{class:"lbl"},
     el("span",{class:"tag c"},"cold"),"Coldroom — end of week")));
@@ -1872,6 +1996,250 @@ function editRange(){
     S.calcCache=null;
     flash(moved?(moved+" beer"+(moved===1?"":"s")+" moved"):"Nothing changed");
   },"Save");
+}
+/* ---- notes on a cell ----
+   The small things that belong to one figure and nowhere else: a PO number
+   against an order, the event a pallet is going to, why a week is odd. Kept
+   on the SKU's plan against the cell's own key, marked with a corner flag and
+   read by clicking it — nothing on screen until you ask for it. */
+function cellNote(sku,k){ return (planOf(sku).notes||{})[k]||""; }
+function setCellNote(sku,k,txt){
+  const pl=planOf(sku); pl.notes=pl.notes||{};
+  const v=(txt||"").trim();
+  if(v) pl.notes[k]=v; else delete pl.notes[k];
+  persist("plan",pl);
+}
+/* every editable cell takes one: right-click anywhere on it, or click the flag */
+function notable(td,sku,k){
+  td.style.position="relative";
+  const p=String(k).split("|");
+  const has=cellNote(sku,k)||((p[0]==="ship"||p[0]==="out")&&shipBatches(sku,p[2],p[3]).length);
+  if(has){
+    td.classList.add("hasnote");
+    const m=el("span",{class:"notemark",title:"Note — click to read it"});
+    m.addEventListener("pointerdown",ev=>{ev.preventDefault();ev.stopPropagation();openNote(td,sku,k);});
+    td.append(m);
+  }
+  td.addEventListener("contextmenu",ev=>{ev.preventDefault();openNote(td,sku,k);});
+  return td;
+}
+let notePop=null;
+function closeNote(){ if(notePop){ notePop.remove(); notePop=null; } }
+function openNote(td,sku,k){
+  closeNote();
+  const r=td.getBoundingClientRect();
+  const pop=el("div",{class:"notepop"});
+  const parts=String(k).split("|");
+  const loc=L(parts[2]), wk=parts[3];
+  pop.append(el("div",{class:"hint"},
+    (loc?loc.name:parts[2])+(wk?" · w/c "+fmtD(wk):"")));
+  const ta=el("textarea",{rows:"2",placeholder:"PO 48213, Beer Fest pallet, anything worth remembering"});
+  ta.value=cellNote(sku,k);
+  pop.append(ta);
+  /* a shipment can also carry its batch codes, which is what lets us work out
+     what the wholesaler is still holding */
+  const kind=parts[0], lines=el("div",{style:"display:flex;flex-direction:column;gap:4px"});
+  const shipping=(kind==="ship"||kind==="out")&&L(parts[2]);
+  if(shipping){
+    pop.append(el("div",{class:"hint",style:"margin-top:2px"},"Batches in this load"));
+    const addLine=(code,qty)=>{
+      const row=el("div",{class:"row",style:"gap:4px"});
+      row.append(el("input",{class:"bcode",type:"text",value:code||"",placeholder:"260075",style:"flex:1"}),
+        el("input",{class:"bqty",type:"number",step:"0.25",value:qty!=null?qty:"",
+          placeholder:"qty",style:"width:62px"}),
+        el("button",{class:"btn sm",type:"button",title:"Remove",
+          onclick:()=>{row.remove();}},"×"));
+      lines.append(row);
+    };
+    for(const x of shipBatches(sku,parts[2],wk)) addLine(x.code,x.qty);
+    if(!shipBatches(sku,parts[2],wk).length) addLine("",null);
+    pop.append(lines);
+    pop.append(el("button",{class:"btn sm",type:"button",style:"align-self:flex-start",
+      onclick:()=>addLine("",null)},"Another batch"));
+  }
+  const save=()=>{
+    setCellNote(sku,k,ta.value);
+    if(shipping) setShipBatches(sku,parts[2],wk,
+      [...lines.children].map(row=>({code:row.querySelector(".bcode").value,
+                                     qty:row.querySelector(".bqty").value})));
+    closeNote(); reflow();
+  };
+  pop.append(el("div",{class:"row",style:"gap:6px;justify-content:flex-end"},
+    cellNote(sku,k)?el("button",{class:"btn sm",onclick:()=>{setCellNote(sku,k,"");closeNote();reflow();}},"Delete"):null,
+    el("button",{class:"btn sm pri",onclick:save},"Save")));
+  /* keep it on screen when the cell is near an edge */
+  pop.style.left=Math.min(window.innerWidth-280,Math.max(8,r.left))+"px";
+  pop.style.top=Math.min(window.innerHeight-250,r.bottom+4)+"px";
+  document.body.append(pop);
+  notePop=pop;
+  ta.focus(); ta.select();
+  ta.addEventListener("keydown",e=>{
+    if(e.key==="Escape"){ closeNote(); }
+    if(e.key==="Enter"&&(e.metaKey||e.ctrlKey)){ e.preventDefault(); save(); }
+  });
+  setTimeout(()=>{
+    const away=e=>{ if(notePop&&!notePop.contains(e.target)){ save(); document.removeEventListener("pointerdown",away); } };
+    document.addEventListener("pointerdown",away);
+  },0);
+}
+/* ---- what the wholesaler is holding, batch by batch ----
+   They tell us one number on a Monday and nothing about batches. We know what
+   we sent them and which batches went in each load. If they ship oldest first,
+   which they do, their stock on hand must be the newest arrivals: work back
+   from the most recent load until the quantity adds up, and whatever is left
+   over at the front has been sold. What comes out is an inference, not a
+   count, so it is always labelled as one.
+
+   plan.batches[locId][week] = [{code, qty}] — what went out that week. */
+function shipBatches(sku,loc,wk){
+  const b=((planOf(sku).batches||{})[loc]||{})[wk];
+  return Array.isArray(b)?b.filter(x=>x&&x.code):[];
+}
+function setShipBatches(sku,loc,wk,list){
+  const pl=planOf(sku);
+  pl.batches=pl.batches||{}; pl.batches[loc]=pl.batches[loc]||{};
+  const keep=(list||[]).filter(x=>x&&x.code&&x.code.trim())
+    .map(x=>({code:x.code.trim(),qty:num(x.qty)}));
+  if(keep.length) pl.batches[loc][wk]=keep; else delete pl.batches[loc][wk];
+  if(!Object.keys(pl.batches[loc]).length) delete pl.batches[loc];
+  persist("plan",pl);
+}
+/* best before for a batch, from wherever we have counted it */
+function batchBB(sku,code){
+  for(const st of S.stock){
+    for(const e of (st.entries||[])){
+      if((e.batch||"")===code&&skuId(e.productId,e.pack)===sku&&e.bestBefore) return e.bestBefore;
+    }
+  }
+  for(const r of S.runs){
+    if(skuId(r.productId,r.pack)===sku&&(r.batch||"")===code&&r.packDate){
+      const sm=shelfMonths(r.productId,r.pack);
+      return addMonths(r.packDate,sm);
+    }
+  }
+  return null;
+}
+/* Every load we have batch codes for, oldest first, as it lands on their
+   shelf — a shipment takes the channel's lead time to arrive. */
+function arrivals(sku,locId,upTo){
+  const pl=planOf(sku), l=L(locId)||{};
+  const lead=Math.max(0,l.leadTimeWeeks||0);
+  const by=(pl.batches||{})[locId]||{};
+  const out=[];
+  for(const wk of Object.keys(by).sort()){
+    const landed=wkAdd(wk,lead);
+    if(upTo&&landed>upTo) continue;
+    const lines=shipBatches(sku,locId,wk);
+    const shipped=at(sku,"out",histLoc(sku,"out",locId),wk);
+    /* one batch and no quantity given means the whole load was that batch */
+    const total=sum(lines.map(x=>num(x.qty)||0));
+    for(const x of lines){
+      let q=num(x.qty);
+      if(q==null) q=(lines.length===1&&shipped!=null)?shipped:null;
+      if(q==null||q<=0) continue;
+      out.push({code:x.code,qty:q,sent:wk,landed,bb:batchBB(sku,x.code)});
+    }
+    if(!total&&lines.length>1&&shipped) {
+      /* several batches, no split given: share the load evenly between them */
+      const each=Math.round(shipped/lines.length*100)/100;
+      for(const x of lines) out.push({code:x.code,qty:each,sent:wk,landed,bb:batchBB(sku,x.code)});
+    }
+  }
+  return out.sort((a,b)=>a.landed<b.landed?-1:a.landed>b.landed?1:0);
+}
+/* Their holding at a week, worked back from the figure they reported. */
+function fifoHolding(sku,locId,wk){
+  const week=wk||S.config.currentWeek;
+  const soh=at(sku,"soh",histLoc(sku,"soh",locId),week);
+  const arr=arrivals(sku,locId,week);
+  const known=sum(arr.map(a=>a.qty));
+  if(soh==null) return {soh:null,arrivals:arr,known,lines:[],unknown:0,short:0};
+  let left=soh;
+  const lines=[];
+  /* newest first: that is what is still there under first-in-first-out */
+  for(let i=arr.length-1;i>=0&&left>0.001;i--){
+    const take=Math.min(arr[i].qty,left);
+    lines.unshift(Object.assign({},arr[i],{qty:Math.round(take*100)/100,
+      part:take<arr[i].qty-0.001}));
+    left-=take;
+  }
+  return {soh,arrivals:arr,known,lines,
+    /* more on their shelf than we have codes for: older stock we never recorded */
+    unknown:Math.round(left*100)/100,
+    /* codes we sent that must already have gone out the door */
+    short:Math.round((known-(soh-left))*100)/100};
+}
+/* What each channel is sitting on, inferred, with how old it is. */
+function viewBatches(s){
+  const cw=S.config.currentWeek;
+  const rows=compute(s.id).rows.filter(r=>r.tracks);
+  openDialog("Batches at the distributors — "+s.product.name+" "+s.pack,b=>{
+    b.append(el("div",{class:"note"},el("b",{},"Worked out, not counted. "),
+      "They report one figure a week and no batches. Taking what we sent them, "+
+      "in the order it landed, and assuming they ship the oldest first, this is "+
+      "what that figure must be made of. Right-click a shipment cell on the grid "+
+      "to record the batches in a load."));
+    let any=false;
+    for(const r of rows){
+      const h=fifoHolding(s.id,r.loc.id,cw);
+      if(h.soh==null&&!h.arrivals.length) continue;
+      any=true;
+      const card=el("div",{style:"margin-top:10px"});
+      card.append(el("div",{class:"row",style:"align-items:baseline;gap:8px"},
+        el("b",{},r.loc.name),
+        el("span",{class:"chip"},h.soh==null?"no figure":qfmt(s.id)(h.soh)+" on hand"),
+        h.unknown>0.01?el("span",{class:"chip warn",
+          title:"More on their shelf than we have batch codes for — older loads we never recorded"},
+          qfmt(s.id)(h.unknown)+" unaccounted"):null,
+        !h.arrivals.length?el("span",{class:"hint"},"no batch codes recorded"):null));
+      if(h.lines.length){
+        const t=el("table",{class:"mini"});
+        t.append(el("thead",{},el("tr",{},el("th",{},"Batch"),el("th",{class:"num"},"On hand"),
+          el("th",{},"Landed"),el("th",{},"Best before"),el("th",{class:"num"},"Days"))));
+        const body=el("tbody");
+        for(const x of h.lines){
+          const d=x.bb?dDiff(cw,x.bb):null;
+          body.append(el("tr",{class:d!=null&&d<=0?"crit":d!=null&&d<=56?"warn":""},
+            el("td",{class:"mono"},x.code,x.part?el("span",{class:"hint"}," part"):null),
+            el("td",{class:"num"},qfmt(s.id)(x.qty)),
+            el("td",{class:"mono dim"},fmtD(x.landed)),
+            el("td",{class:"mono dim"},x.bb?fmtD(x.bb):"—"),
+            el("td",{class:"num"},d==null?"—":String(d))));
+        }
+        t.append(body); card.append(t);
+      }
+      b.append(card);
+    }
+    if(!any) b.append(el("div",{class:"empty"},
+      "Nothing to work from yet — record the batches on a few shipments first."));
+  },null,"Done");
+}
+/* everything noted on this SKU, in one place */
+const NOTE_ROW={ship:"going out",out:"went out",draw:"drawdown",soh:"their stock"};
+function listNotes(s){
+  const pl=planOf(s.id), notes=pl.notes||{};
+  const rows=Object.keys(notes).map(k=>{
+    const p=k.split("|");
+    return {k,kind:p[0],loc:p[2],wk:p[3],text:notes[k]};
+  }).sort((a,b)=>a.wk<b.wk?-1:a.wk>b.wk?1:0);
+  openDialog("Notes — "+s.product.name+" "+s.pack,b=>{
+    b.append(el("div",{class:"note"},el("b",{},"Right-click any cell "),
+      "on this SKU's grid to leave a note against it — a PO number, an event, "+
+      "why a week looks odd. A cell with one carries a small corner flag; click that to read it."));
+    if(!rows.length){ b.append(el("div",{class:"empty"},"Nothing noted yet.")); return; }
+    const t=el("table",{class:"mini"});
+    t.append(el("thead",{},el("tr",{},el("th",{},"Week"),el("th",{},"Channel"),
+      el("th",{},"Row"),el("th",{},"Note"),el("th",{},""))));
+    const body=el("tbody");
+    for(const r of rows) body.append(el("tr",{},
+      el("td",{class:"mono"},fmtW(r.wk)),
+      el("td",{},(L(r.loc)||{name:r.loc}).name),
+      el("td",{class:"dim"},NOTE_ROW[r.kind]||r.kind),
+      el("td",{},r.text),
+      el("td",{},el("button",{class:"btn sm",type:"button",title:"Remove this note",
+        onclick:()=>{setCellNote(s.id,r.k,"");$("#dlg").close();render();}},"×"))));
+    t.append(body); b.append(t);
+  },()=>{render();},"Done");
 }
 function growthBox(sku,r){
   if(r.basis!=="prior_year") return null;
@@ -1940,7 +2308,7 @@ function drawCell(sku,r,wk,computed){
     placeholder:F(computed)||"0",
     title:"What we expect "+r.loc.name+" to draw down. "+(BASIS_HINT[r.basis]||""),
     onchange:e=>setDraw(sku,r,wk,e.target.value)}));
-  return td;
+  return notable(td,sku,"draw|"+sku+"|"+r.loc.id+"|"+wk);
 }
 function setDraw(sku,r,wk,val){
   const pl=planOf(sku);
@@ -1958,7 +2326,7 @@ function sohNowCell(sku,r,wk,isNow){
   const F=qfmt(sku);
   const stored=at(sku,"soh",histLoc(sku,"soh",r.loc.id),wk);
   const est=stored==null?estimateSOH(sku,r.loc.id,wk):null;
-  const td=el("td",{class:"v inp"+(isNow?" now":"")+(stored!=null?" edited":"")});
+  const td=el("td",{class:"v inp"+(isNow?" now nowcol":"")+(stored!=null?" edited":"")});
   td.append(el("input",{type:"text",inputmode:"decimal",
     value:stored!=null?F(stored):"",
     "data-k":"soh|"+sku+"|"+r.loc.id+"|"+wk,
@@ -1966,7 +2334,7 @@ function sohNowCell(sku,r,wk,isNow){
     title:stored!=null?("What "+r.loc.name+" reported holding this week")
       :("Carried forward — type what "+r.loc.name+" reports and this week's drawdown becomes exact"),
     onchange:e=>{setTheirSOH(sku,r.loc.id,wk,e.target.value);reflow();}}));
-  return td;
+  return notable(td,sku,"soh|"+sku+"|"+r.loc.id+"|"+wk);
 }
 /* Two columns are live. Monday morning last week's is tidied up with what
    actually went out; Monday afternoon this one says what is going out, and
@@ -1978,7 +2346,7 @@ function nowCell(sku,r,wk,v,isNow){
      figure rather than off nothing */
   const F=qfmt(sku);
   const plan=isNow&&v==null&&r.planNow!=null?r.planNow:null;
-  const td=el("td",{class:"v inp"+(isNow?" now":"")+(v!=null?" edited":plan!=null?" plan":"")});
+  const td=el("td",{class:"v inp"+(isNow?" now nowcol":"")+(v!=null?" edited":plan!=null?" plan":"")});
   td.append(el("input",{type:"text",inputmode:"decimal",value:v==null?"":F(v),
     "data-k":"out|"+sku+"|"+r.loc.id+"|"+wk,
     placeholder:plan!=null?F(plan):"—",
@@ -1986,7 +2354,7 @@ function nowCell(sku,r,wk,v,isNow){
           +(plan!=null?" — planned "+F(plan)+", type the figure to confirm it":". Saved as the week's actual."))
                :("What actually went to "+r.loc.name+" last week"),
     onchange:e=>{setActual(sku,r.loc.id,wk,e.target.value);reflow();}}));
-  return td;
+  return notable(td,sku,"out|"+sku+"|"+r.loc.id+"|"+wk);
 }
 /* Every shipping figure can be typed over. Where it lands depends on how the
    location is replenished: an order plan, a known order against the auto top-up,
@@ -2012,7 +2380,7 @@ function shipCell(sku,r,wk,computed){
             :"Topping up to "+F(r.target)+". Type a figure if you already know what's going.")
         :"What we plan to send. Type a figure to fix it.",
     onchange:e=>setShip(sku,r,wk,e.target.value)});
-  td.append(inp); return td;
+  td.append(inp); return notable(td,sku,"ship|"+sku+"|"+r.loc.id+"|"+wk);
 }
 function setShip(sku,r,wk,val){
   const field=shipField(r.method), pl=planOf(sku);
@@ -3145,6 +3513,70 @@ function editRunsForWeek(sku,week){
     b.append(el("button",{class:"btn",type:"button",style:"align-self:flex-start",
       onclick:()=>{$("#dlg").close();newRun(sku,week);}},"Add another run"));
   },()=>{ render(); },"Done");
+}
+/* Stock moved in or out of the coldroom by hand, and repacks. */
+function editAdjust(s,preset){
+  const cw=S.config.currentWeek;
+  const all=()=>adjustments(s.id).slice().sort((a,b)=>a.wk<b.wk?1:-1);
+  openDialog("Stock adjustments — "+s.product.name+" "+s.pack,b=>{
+    b.append(el("div",{class:"note"},
+      "Anything that moves coldroom stock without being a packaging run, a shipment or a return. ",
+      el("b",{},"Minus "),"for beer that has gone but will still be counted — invoiced Friday, shipping next week. ",
+      el("b",{},"Plus "),"for beer found or brought back in."));
+    const form=el("div",{class:"grid3"});
+    form.append(
+      field("Week",el("input",{type:"date",id:"adw",value:preset&&preset.wk||cw}),"Snaps to the Monday"),
+      field("Quantity",el("input",{type:"number",id:"adq",step:"0.25",placeholder:"-720"}),
+        "Minus takes it out"),
+      field("Reason",el("input",{type:"text",id:"adn",placeholder:"Invoiced Friday for Woolies"})));
+    b.append(form);
+    b.append(el("button",{class:"btn pri",type:"button",style:"align-self:flex-start",onclick:()=>{
+      const q=num($("#adq",b).value);
+      if(!q){flash("How many, and which way?");return;}
+      addAdjust(s.id,{wk:monday($("#adw",b).value||cw),qty:q,note:$("#adn",b).value.trim()});
+      $("#dlg").close(); render(); flash("Adjustment saved");
+    }},"Add this adjustment"));
+
+    b.append(el("div",{class:"fld",style:"margin-top:6px"},"Repack"));
+    b.append(el("div",{class:"note"},
+      "One pack becoming another — 6 × 50L kegs repacked as 10 × 30L. "+
+      "It comes out of this SKU and goes into the other, in one go."));
+    const mates=skus().filter(x=>x.product.id===s.product.id&&x.id!==s.id);
+    const others=mates.length?mates:skus().filter(x=>x.id!==s.id);
+    const rp=el("div",{class:"grid3"});
+    rp.append(
+      field("Out of here",el("input",{type:"number",id:"rpf",step:"0.25",placeholder:"6"}),
+        (PACK_UNIT[s.pack]||"units")),
+      field("Into",sel(others.map(x=>[x.id,x.product.name+" "+x.pack]),
+        (others[0]||{}).id,{id:"rpt"})),
+      field("Quantity",el("input",{type:"number",id:"rpq",step:"0.25",placeholder:"10"})));
+    b.append(rp);
+    b.append(el("div",{class:"row",style:"gap:8px;align-items:flex-end"},
+      field("Week",el("input",{type:"date",id:"rpw",value:cw})),
+      el("button",{class:"btn",type:"button",onclick:()=>{
+        const f=num($("#rpf",b).value), t=num($("#rpq",b).value), to=$("#rpt",b).value;
+        if(!f||!t||!to){flash("How much out, how much in, and into what?");return;}
+        repack(s.id,f,to,t,monday($("#rpw",b).value||cw));
+        $("#dlg").close(); render(); flash("Repack recorded on both SKUs");
+      }},"Record the repack")));
+
+    const have=all();
+    if(have.length){
+      const t=el("table",{class:"mini"});
+      t.append(el("thead",{},el("tr",{},el("th",{},"Week"),el("th",{class:"num"},"Qty"),
+        el("th",{},"Reason"),el("th",{},""))));
+      const body=el("tbody");
+      for(const a of have) body.append(el("tr",{},
+        el("td",{class:"mono"},fmtW(a.wk)),
+        el("td",{class:"num"+(a.qty<0?" neg":"")},(a.qty>0?"+":"")+qfmt(s.id)(a.qty)),
+        el("td",{class:"dim"},a.note||"—"),
+        el("td",{},el("button",{class:"btn sm",type:"button",
+          title:a.link?"Remove — the other half of the repack goes too":"Remove",
+          onclick:()=>{if(!confirm(a.link?"Remove this repack from both SKUs?":"Remove this adjustment?"))return;
+            dropAdjust(s.id,a.id);$("#dlg").close();render();}},"×"))));
+      t.append(body); b.append(t);
+    }
+  },()=>{render();},"Done");
 }
 /* ---- returns ----
    Everything recorded about stock that came back from one channel, with the
