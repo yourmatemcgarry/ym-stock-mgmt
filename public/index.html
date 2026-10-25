@@ -403,7 +403,7 @@ dialog footer{padding:12px 16px;border-top:1px solid var(--line-soft);display:fl
 /* Which build this is. It shows at the bottom of the sidebar and on Setup, so
    there is never any doubt about whether a deploy actually landed: if the
    stamp hasn't changed after deploying, the browser is still on the old file. */
-const BUILD="2026-10-23b · adjustments, repacks, the week in view";
+const BUILD="2026-10-25 · ALM, Paramount and ILG report their own stock";
 /* ============================ helpers ============================ */
 const $ = (s,r)=> (r||document).querySelector(s);
 const el = (t,a,...k)=>{const n=document.createElement(t);
@@ -559,11 +559,26 @@ async function boot(){
      back. */
   const thisWeek=monday(new Date());
   if(S.config.currentWeek!==thisWeek){ S.config.currentWeek=thisWeek; saveConfig(); }
+  reportingDefaults();
   syncHistoryFromStocktakes(false);
   render();
   if(b&&b.kind==="rest") checkSeedVersion().then(meta=>{
     if(meta){ S.seedUpdate=meta; render(); }
   });
+}
+/* ---- one-time: the distributors who send us a figure rather than being counted ----
+   ALM, Paramount and ILG report their own stock on hand, the same as the chains
+   do. Before this they were counted on the stocktake sheet, which locked their
+   stock-on-hand cell in the grid. Flipping them once, here, means nobody has to
+   go and do it in Setup — and anyone can change it there afterwards. */
+const REPORTING=["alm","paramount-qld","ilg"];
+function reportingDefaults(){
+  if(S.config.reportingV1) return;
+  for(const id of REPORTING){
+    const l=L(id);
+    if(l&&l.reports==null){ l.reports=true; persist("locations",l); }
+  }
+  S.config.reportingV1=true; saveConfig();
 }
 function seedBlank(){
   S.locations=[{id:"coldroom",name:"Coldroom",type:"internal",method:"none",active:true,sort:99}];
@@ -716,6 +731,7 @@ function syncHistoryFromStocktakes(save){
     const by={};
     for(const e of (st.entries||[])){
       if(e.qty==null) continue;        /* line not counted yet — says nothing */
+      if(reportsOwn(e.locationId)) continue;   /* they report it; a count can't overrule that */
       const k=skuId(e.productId,e.pack)+"|"+e.locationId;
       by[k]=(by[k]||0)+(e.qty||0);
     }
@@ -764,12 +780,29 @@ function estimateSOH(sku,locId,wk){
   }
   return Math.max(0,Math.round(soh*100)/100);
 }
-/* was this location actually counted in that week's stocktake? */
+/* ---- who tells us what they are holding ----
+   A retail chain always reports its own stock on hand; a distributor does when
+   it has been marked that way in Setup. Either way nobody counts them for us,
+   so their figure is typed into the forecast grid and their stocktake lines —
+   if any were ever made — are ignored by everything that works out stock. */
+function reportsOwn(locId){
+  const l=L(locId); if(!l) return false;
+  return l.reports!=null?!!l.reports:l.type==="retail";
+}
+/* was this location actually counted in that week's stocktake?
+   A line copied forward but left blank is not a count — nobody has been to it. */
 function countedAt(locId,wk){
+  if(reportsOwn(locId)) return false;
   const st=S.stock.find(s=>s.weekStart===wk);
-  return !!(st&&st.entries&&st.entries.some(e=>e.locationId===locId));
+  return !!(st&&st.entries&&st.entries.some(e=>e.locationId===locId&&e.qty!=null));
 }
 function openingSOH(sku,locId){
+  /* where they report their own stock, what they reported is the figure; a
+     count is only a fallback for a week nobody has typed one in for */
+  if(reportsOwn(locId)){
+    const v=at(sku,"soh",histLoc(sku,"soh",locId),S.config.currentWeek);
+    if(v!=null) return v;
+  }
   const st=S.stock.find(s=>s.weekStart<=S.config.currentWeek)||S.stock[0];
   if(st&&st.entries){
     /* a line with no quantity hasn't been counted yet, so it says nothing about
@@ -1830,7 +1863,7 @@ function skuGrid(s,c){
           "plan → "+fmtW(r.lastPlanned)):null));
       tr3.append(l3);
       (r.pastSoh||[]).forEach((v,i)=>tr3.append(
-        i>=cwIdx-1&&!countedAt(r.loc.id,c.past[i])
+        i>=cwIdx-1&&(reportsOwn(r.loc.id)||!countedAt(r.loc.id,c.past[i]))
           ? sohNowCell(s.id,r,c.past[i],i===cwIdx) : vcell(v,i)));
       r.soh.forEach((v,i)=>{const low=r.target>0&&v<r.target*0.4;
         tr3.append(vcell(v,NP+i,v<0?"neg":low?"low":""));});
@@ -2583,6 +2616,10 @@ function viewStocktake(pane,ctl){
     const c=el("div",{class:"card"});
     c.append(el("header",{},el("h3",{},loc.name),
       el("span",{class:"chip acc"},LOCTYPE[loc.type]||"Location"),
+      reportsOwn(lid)?el("span",{class:"chip warn",
+        title:"They report their own stock on hand — type it into the forecast grid. "+
+              "Anything counted here is kept as a record but doesn't move the forecast."},
+        "reported, not counted"):null,
       el("span",{class:"chip"},rows.length+" lines"),
       el("span",{style:"flex:1"}),
       el("span",{class:"chip"},n0(sum(rows.map(r=>r.qty)))+" counted"),
@@ -2798,7 +2835,9 @@ function newStocktake(){
        has been to that pallet yet, where a zero means someone went and found
        none. Starting them at zero told the forecast the whole warehouse was
        empty the moment the count was created. */
-    const entries=(mode==="copy"&&last?(last.entries||[]).map(e=>({...e,id:uid("e"),qty:null})):[]);
+    const entries=(mode==="copy"&&last
+      ?(last.entries||[]).filter(e=>!reportsOwn(e.locationId)).map(e=>({...e,id:uid("e"),qty:null}))
+      :[]);
     const doc={id:w,weekStart:w,status:"draft",entries,createdAt:new Date().toISOString(),note:""};
     S.stock.unshift(doc); S.stock.sort((a,b)=>a.weekStart<b.weekStart?1:-1);
     /* counting a week early must not drag the whole app forward with it */
@@ -4497,6 +4536,12 @@ function editLocation(l){
     box.append(field("Target cover",el("input",{type:"number",id:"lw",value:rec.targetWeeks||3,min:"0",step:"0.5"}),
       "Weeks of their drawdown to hold in their warehouse"));
     box.append(field("Lead time",el("input",{type:"number",id:"ll",value:rec.leadTimeWeeks||0,min:"0",max:"12"}),"Weeks from order to delivery"));
+    box.append(field("Stock on hand",
+      sel([["reported","They report it — type it on the forecast"],
+           ["counted","We count it on the stocktake sheet"]],
+        (rec.reports!=null?!!rec.reports:rec.type==="retail")?"reported":"counted",{id:"lr"}),
+      "Reported means their stock on hand is typed into the forecast grid each week, "+
+      "and the stocktake sheet leaves them alone"));
     box.append(field("Order multiple",el("input",{type:"number",id:"lo",value:rec.orderMultiple||1,min:"1"}),
       "Round orders up to this — e.g. 144 for a pallet of cans"));
     b.append(box); toggleLoc(b,rec.type);
@@ -4510,6 +4555,7 @@ function editLocation(l){
     rec.method=$("#lm",body).value; rec.plannedHorizon=num($("#lh",body).value)||13;
     rec.targetWeeks=num($("#lw",body).value)||3; rec.leadTimeWeeks=num($("#ll",body).value)||0;
     rec.orderMultiple=num($("#lo",body).value)||1;
+    rec.reports=$("#lr",body).value==="reported";
     if(isNew) S.locations.push(rec);
     S.locations.sort((a,b2)=>(a.sort|0)-(b2.sort|0));
     persist("locations",rec); flash(name+" saved");
