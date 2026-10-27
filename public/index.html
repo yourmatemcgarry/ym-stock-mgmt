@@ -403,7 +403,7 @@ dialog footer{padding:12px 16px;border-top:1px solid var(--line-soft);display:fl
 /* Which build this is. It shows at the bottom of the sidebar and on Setup, so
    there is never any doubt about whether a deploy actually landed: if the
    stamp hasn't changed after deploying, the browser is still on the old file. */
-const BUILD="2026-10-25 · ALM, Paramount and ILG report their own stock";
+const BUILD="2026-10-27 · two sheds, keg pools, batch codes off the run";
 /* ============================ helpers ============================ */
 const $ = (s,r)=> (r||document).querySelector(s);
 const el = (t,a,...k)=>{const n=document.createElement(t);
@@ -423,6 +423,12 @@ const DAY=864e5;
 const iso=d=>{const x=new Date(d);return new Date(Date.UTC(x.getUTCFullYear(),x.getUTCMonth(),x.getUTCDate())).toISOString().slice(0,10);};
 const D=s=>new Date(s+"T00:00:00Z");
 const monday=d=>{const x=D(iso(d));const g=(x.getUTCDay()+6)%7;x.setUTCDate(x.getUTCDate()-g);return iso(x);};
+/* Today where the user is standing. iso() reads a date in UTC, which in
+   Queensland is still yesterday until 10am — so the week used to click over
+   mid-morning on a Monday. Read the local calendar instead. */
+const todayLocal=()=>{const d=new Date();
+  return iso(new Date(Date.UTC(d.getFullYear(),d.getMonth(),d.getDate())));};
+const thisMonday=()=>monday(todayLocal());
 const wkAdd=(w,n)=>{const x=D(w);x.setUTCDate(x.getUTCDate()+7*n);return iso(x);};
 const wkDiff=(a,b)=>Math.round((D(b)-D(a))/(7*DAY));
 const dDiff=(a,b)=>Math.round((D(b)-D(a))/DAY);
@@ -466,7 +472,7 @@ const LOCTYPE={distributor:"Distributor",retail:"Retail chain",direct:"Direct ch
 /* ============================ state ============================ */
 const S={
   ready:false, backend:null, mode:"loading",
-  config:{currentWeek:monday(new Date()),horizon:26,past:6,avgWindow:8,
+  config:{currentWeek:thisMonday(),horizon:26,past:6,avgWindow:8,
           defaultDrawBasis:"prior_year",defaultShipMethod:"target_soh",coverWarnWeeks:2},
   products:[], locations:[], hist:{}, plan:{}, stock:[], runs:[],
   view:"forecast", open:{}, packTab:"all", prodTab:"all", dirty:new Set(), calcCache:null
@@ -557,8 +563,28 @@ async function boot(){
      ahead — by counting next week's stock early, say — every column in the grid
      shifts with it and the forecast starts a week late, with nothing to put it
      back. */
-  const thisWeek=monday(new Date());
-  if(S.config.currentWeek!==thisWeek){ S.config.currentWeek=thisWeek; saveConfig(); }
+  /* "as of" pins the session to a week — for looking at an old one, and for
+     the test rig. It is never saved, and the clock doesn't move it on. */
+  const asof=(typeof __ASOF__!=="undefined"&&__ASOF__)
+    ||new URLSearchParams(location.search).get("asof");
+  if(asof){
+    S.config.currentWeek=monday(asof);
+    S.pinnedWeek=S.config.currentWeek;
+  } else {
+    const thisWeek=thisMonday();
+    if(S.config.currentWeek!==thisWeek){ S.config.currentWeek=thisWeek; saveConfig(); }
+  }
+  /* a tab left open over the weekend rolls over by itself, but never while
+     somebody is mid-count */
+  setInterval(()=>{
+    if(S.pinnedWeek) return;
+    const w=thisMonday();
+    if(w===S.config.currentWeek) return;
+    const a=document.activeElement;
+    if(a&&(a.tagName==="INPUT"||a.tagName==="SELECT"||a.tagName==="TEXTAREA")) return;
+    S.config.currentWeek=w; saveConfig(); S.calcCache=null;
+    flash("Week commencing "+fmtWY(w)); render();
+  },5*60*1000);
   reportingDefaults();
   syncHistoryFromStocktakes(false);
   render();
@@ -2588,6 +2614,17 @@ function viewStocktake(pane,ctl){
   }
   pane.append(t);
 
+  if((st.retired||[]).length){
+    const r=el("div",{class:"note"});
+    r.append(el("b",{},(st.retired.length)+" batch"+(st.retired.length===1?"":"es")+" retired. "),
+      "They counted zero last week, so they aren't on this sheet. ",
+      el("button",{class:"btn sm",style:"margin-left:6px",onclick:()=>{
+        st.entries=(st.entries||[]).concat(st.retired);
+        delete st.retired; persist("stocktakes",st); S.calcCache=null;
+        flash("Retired batches are back on the sheet"); render();
+      }},"Put them back"));
+    pane.append(r);
+  }
   pane.append(el("div",{class:"note"},el("b",{},"How this is used. "),
     "The most recent stocktake sets opening stock for the forecast — coldroom and each distributor's shelf. ",
     "Best-before dates on each batch drive the aged-stock and send-by flags."));
@@ -2625,10 +2662,13 @@ function viewStocktake(pane,ctl){
       el("span",{class:"chip"},n0(sum(rows.map(r=>r.qty)))+" counted"),
       el("button",{class:"btn sm",onclick:()=>editEntry(st,{locationId:lid})},"Add line")));
     const w=el("div",{class:"scroll tall"}), tb=el("table");
-    tb.append(el("thead",{},el("tr",{},el("th",{},"Product"),el("th",{},"Pack"),el("th",{},"Batch"),
-      el("th",{},"Where"),
+    const kegs=rows.some(r=>hasFleet(r.pack));
+    tb.append(el("thead",{},el("tr",{},el("th",{},"Product"),el("th",{},"Pack"),
+      kegs?el("th",{title:"Which keg pool this lot belongs to"},"Keg"):null,
+      el("th",{},"Batch"),
       el("th",{class:"num"},"Last week"),
-      el("th",{class:"num"},"Count"),
+      ...COUNT_AREAS.map(a=>el("th",{class:"num",title:"Counted at "+a},a)),
+      el("th",{class:"num",title:"The two sheds added up — this is what the ERP is compared with"},"Count"),
       el("th",{class:"num"},"ERP"),el("th",{class:"num"},"Diff"),
       el("th",{},"Note"),el("th",{title:"Flag this line to be counted again"},"Re-count"),
       el("th",{},"Best before"),el("th",{},"Send by"),
@@ -2640,19 +2680,39 @@ function viewStocktake(pane,ctl){
       const sm=shelfMonths(e.productId,e.pack);
       const sb=e.bestBefore?iso(new Date(D(e.bestBefore)-Math.round(sm/2*30.44)*DAY)):null;
       const d=sb?dDiff(S.config.currentWeek,sb):null;
-      const qty=el("input",{class:"cellinp num qty",type:"text",inputmode:"decimal",
-        value:e.qty!=null?F(e.qty):"", placeholder:"—",
-        title:"Leave blank until it's counted; type 0 for a bay with none in it",
+      /* one box per shed; the line's figure is the two added up */
+      const areaIn=COUNT_AREAS.map(a=>el("input",{class:"cellinp num qty",type:"text",
+        inputmode:"decimal",
+        value:areaQty(e,a)!=null?F(areaQty(e,a)):"", placeholder:"—",
+        title:"Counted at "+a+" — leave blank until it's counted, type 0 for a bay with none in it",
         onfocus:ev=>ev.target.select(),
         onkeydown:ev=>stepCell(ev),
-        onchange:ev=>{e.qty=num(ev.target.value);stSave(st);}});
+        onchange:ev=>{setAreaQty(st,e,a,ev.target.value);reflow();}}));
+      const total=el("span",{class:"num"+(unsplit(e)?" dim":"")},
+        e.qty!=null?F(e.qty):"—");
+      if(unsplit(e)) total.title="Counted before the sheds were split out. "
+        +"Type a figure into either shed and this becomes the two added up.";
+      const fleet=hasFleet(e.pack)?sel([["","—"],...KEG_FLEETS.map(f=>[f,f])],e.fleet||"",
+        {class:"cellinp",title:"Which keg pool this lot belongs to",
+         onchange:ev=>{const v=ev.target.value; if(v) e.fleet=v; else delete e.fleet; stSave(st);}})
+        :null;
+      const sku=skuId(e.productId,e.pack);
+      const known=knownBatches(sku);
+      const listId="bl-"+e.id;
       const bat=el("input",{class:"cellinp mono",type:"text",value:e.batch||"",placeholder:"batch",
+        list:known.length?listId:null,
+        title:known.length?"Codes already recorded on a packaging run or an earlier count":"",
         onkeydown:ev=>stepCell(ev),
-        onchange:ev=>{e.batch=ev.target.value.trim();stSave(st);}});
+        onchange:ev=>{
+          e.batch=ev.target.value.trim();
+          /* a code we already know brings its best before with it */
+          const hit=known.find(x=>x.code===e.batch);
+          if(hit&&hit.bb&&!e.bestBefore){ e.bestBefore=hit.bb; stSave(st); render(); return; }
+          stSave(st);}});
+      const dl=known.length?el("datalist",{id:listId},
+        ...known.slice(0,40).map(x=>el("option",{value:x.code}))):null;
       const bb=el("input",{class:"cellinp mono",type:"date",value:e.bestBefore||"",
         onchange:ev=>{e.bestBefore=ev.target.value||null;stSave(st);render();}});
-      /* where in the building this lot sits */
-      const ar=areaCell(st,e);
       /* what the ERP says it holds, against what was counted */
       const erp=el("input",{class:"cellinp num",type:"text",inputmode:"decimal",
         value:e.erp!=null?F(e.erp):"",placeholder:"—",
@@ -2680,10 +2740,11 @@ function viewStocktake(pane,ctl){
           "data-zero":String(e.qty==null)},
         el("td",{},swatch(e.productId),(P(e.productId)||{name:e.productId}).name),
         el("td",{class:"dim"},e.pack),
-        el("td",{class:"cell"},bat),
-        el("td",{class:"cell"},ar),
+        kegs?el("td",{class:"cell"},fleet):null,
+        el("td",{class:"cell"},bat,dl),
         el("td",{class:"num dim",title:"Counted in the previous stocktake"},prev==null?"—":F(prev)),
-        el("td",{class:"cell"},qty),
+        ...areaIn.map(i=>el("td",{class:"cell"},i)),
+        el("td",{class:"num tot"},total),
         el("td",{class:"cell"},erp),
         el("td",{class:"num"+(diff?" neg":"")},diff==null?"—":(diff>0?"+":"")+F(diff)),
         el("td",{class:"cell"},note),
@@ -2732,17 +2793,27 @@ function lastWeekQty(st,e){
   }
   return sum(same.map(x=>x.qty||0));
 }
-/* ---- where in the building ----
-   The list of areas is kept in Setup; a line can also be left blank. */
-function areaList(){ return (S.config.areas||[]).filter(Boolean); }
-function areaCell(st,e){
-  const opts=[["","—"],...areaList().map(a=>[a,a])];
-  const cur=e.area||"";
-  if(cur&&!areaList().includes(cur)) opts.push([cur,cur]);
-  return sel(opts,cur,{class:"cellinp",
-    title:"Where this lot is — the list is set up under Setup",
-    onchange:ev=>{const v=ev.target.value; if(!v) delete e.area; else e.area=v; stSave(st);}});
+
+/* ---- where the beer is counted ----
+   Every line is counted in both sheds and the two add up to the line's figure,
+   which is what the ERP is compared against. A line counted before this existed
+   keeps its single figure until somebody types into one of the sheds. */
+const COUNT_AREAS=["41 Tech","43 Tech"];
+/* 50L kegs belong to one pool or the other; everything else has no fleet */
+const KEG_FLEETS=["Konvoy","Your Mates"];
+const hasFleet=pack=>pack==="Keg";
+function areaQty(e,a){ return e.counts?e.counts[a]:undefined; }
+function setAreaQty(st,e,a,val){
+  const v=num(val);
+  e.counts=e.counts||{};
+  if(v==null) delete e.counts[a]; else e.counts[a]=v;
+  const vals=COUNT_AREAS.map(x=>e.counts[x]).filter(x=>x!=null);
+  if(vals.length) e.qty=Math.round(sum(vals)*100)/100;
+  else { delete e.qty; delete e.counts; }
+  stSave(st);
 }
+/* a line counted the old way, with one figure and no split */
+const unsplit=e=>e.qty!=null&&!e.counts;
 /* inline grid entry: debounce writes so typing down a column is one save, not fifty */
 let stTimer=null, stPending=null;
 function stSave(st){
@@ -2835,10 +2906,17 @@ function newStocktake(){
        has been to that pallet yet, where a zero means someone went and found
        none. Starting them at zero told the forecast the whole warehouse was
        empty the moment the count was created. */
-    const entries=(mode==="copy"&&last
-      ?(last.entries||[]).filter(e=>!reportsOwn(e.locationId)).map(e=>({...e,id:uid("e"),qty:null}))
-      :[]);
-    const doc={id:w,weekStart:w,status:"draft",entries,createdAt:new Date().toISOString(),note:""};
+    /* A batch counted down to zero has gone: it doesn't come across to the new
+       sheet. Nothing is thrown away — the lines are kept on the document and
+       one button puts them back if a pallet turns up. */
+    const carry=(mode==="copy"&&last?(last.entries||[]):[])
+      .filter(e=>!reportsOwn(e.locationId));
+    const fresh=e=>{const c={...e,id:uid("e")}; delete c.qty; delete c.counts;
+      delete c.erp; delete c.note; delete c.recount; return c;};
+    const entries=carry.filter(e=>e.qty!==0).map(fresh);
+    const retired=carry.filter(e=>e.qty===0).map(fresh);
+    const doc={id:w,weekStart:w,status:"draft",entries,retired,
+      createdAt:new Date().toISOString(),note:""};
     S.stock.unshift(doc); S.stock.sort((a,b)=>a.weekStart<b.weekStart?1:-1);
     /* counting a week early must not drag the whole app forward with it */
     persist("stocktakes",doc); stWeek=w;
@@ -3407,12 +3485,16 @@ function newRun(sku,packDate,units,existing){
       field("Pack date",el("input",{type:"date",id:"rd",value:r.packDate,onchange:()=>syncBrew(b)})),
       field("Units planned",el("input",{type:"number",id:"ru",value:r.units,placeholder:"576",
         oninput:()=>volNote(b)}))));
-    b.append(el("div",{class:"grid2"},
+    b.append(el("div",{class:"grid3"},
       field("Units actually packaged",el("input",{type:"number",id:"ra",
         value:r.actualUnits!=null?r.actualUnits:"",placeholder:"leave blank until it's run",
         oninput:()=>volNote(b)}),
         "Once this is filled in the coldroom works off it, not the plan"),
-      el("div",{})));
+      field("Batch code",el("input",{type:"text",id:"rbc",value:r.batch||"",placeholder:"260075"}),
+        "Entered here once — the stocktake picks it up"),
+      field("Best before",el("input",{type:"date",id:"rbb",value:r.bestBefore||"",
+        onchange:()=>{$("#rbb",b).dataset.typed="1";}}),
+        "Fills itself in from the pack date and the beer's shelf life")));
     b.append(el("div",{class:"grid2"},
       field("Status",sel([["planned","Planned"],["confirmed","Confirmed"],["cancelled","Cancelled"]],r.status,{id:"rs"})),
       el("div",{class:"note",id:"rvol",style:"margin:0"},"—")));
@@ -3447,11 +3529,16 @@ function newRun(sku,packDate,units,existing){
     b.append(field("Note",el("input",{type:"text",id:"rn",value:r.note||"",placeholder:"Tank 4, double batch"})));
     if(existing) b.append(el("button",{class:"btn danger",type:"button",style:"align-self:flex-start",
       onclick:()=>{S.runs=S.runs.filter(x=>x.id!==r.id);remove("runs",r.id);$("#dlg").close();render();}},"Delete run"));
-    syncPacks(b,r.pack,"rp","rk"); syncBrew(b); volNote(b);
+    syncPacks(b,r.pack,"rp","rk"); syncBrew(b); volNote(b); syncBB(b,!r.bestBefore);
+    for(const id of ["rd","rp","rk"]) $("#"+id,b).addEventListener("change",()=>syncBB(b));
   },body=>{
     const act=num($("#ra",body).value);
     const rec={id:r.id,productId:$("#rp",body).value,pack:$("#rk",body).value,packDate:$("#rd",body).value,
       units:num($("#ru",body).value)||0,status:$("#rs",body).value,note:$("#rn",body).value.trim()};
+    const code=$("#rbc",body).value.trim();
+    if(code) rec.batch=code;
+    const bb=$("#rbb",body).value;
+    if(bb) rec.bestBefore=bb;
     if(act!=null) rec.actualUnits=act;
     setRunTanks(rec,[...$("#rtanks",body).children].map(row=>({
       tank:row.querySelector(".rtk").value,
@@ -3465,6 +3552,27 @@ function newRun(sku,packDate,units,existing){
     if(i>=0) S.runs[i]=rec; else S.runs.push(rec);
     persist("runs",rec); flash("Run saved — the coldroom forecast has moved");
   },existing?"Save":"Schedule");
+}
+/* Best before = packed + the beer's shelf life, unless somebody types one. */
+function syncBB(b,force){
+  const f=$("#rbb",b); if(!f) return;
+  if(f.dataset.typed==="1"&&!force) return;
+  if(f.value&&!force&&f.dataset.auto!=="1") return;
+  const pid=$("#rp",b).value, pack=$("#rk",b).value, pd=$("#rd",b).value;
+  if(!pd) return;
+  f.value=addMonths(pd,shelfMonths(pid,pack));
+  f.dataset.auto="1";
+}
+/* every batch code we know for a SKU, newest first, for the count sheet */
+function knownBatches(sku){
+  const out=[], seen=new Set();
+  const add=(code,bb)=>{ if(!code||seen.has(code)) return; seen.add(code); out.push({code,bb}); };
+  for(const r of S.runs.slice().sort((a,b)=>(b.packDate||"").localeCompare(a.packDate||"")))
+    if(skuId(r.productId,r.pack)===sku&&r.batch)
+      add(r.batch,r.bestBefore||(r.packDate?addMonths(r.packDate,shelfMonths(r.productId,r.pack)):null));
+  for(const st of S.stock) for(const e of (st.entries||[]))
+    if(skuId(e.productId,e.pack)===sku&&e.batch) add(e.batch,e.bestBefore||null);
+  return out;
 }
 /* the volume the dialog is working with, from whatever is typed in it now */
 function brewVolFrom(b){
@@ -4284,36 +4392,6 @@ function viewSetup(pane,ctl){
       "Load the brewery's list, or add them one at a time."));
   }
   pane.append(tc);
-
-  /* where stock sits inside a location — the stocktake's "Where" column */
-  const ac=el("div",{class:"card"});
-  const areas=areaList();
-  ac.append(el("header",{},el("h3",{},"Storage areas"),
-    el("span",{class:"chip"},areas.length+(areas.length===1?" area":" areas")),
-    el("span",{style:"flex:1"}),
-    el("span",{class:"hint"},"Picked per line when counting, so stock can be found again")));
-  const ab=el("div",{class:"body",style:"display:flex;flex-direction:column;gap:10px"});
-  const chips=el("div",{class:"row",style:"flex-wrap:wrap;gap:6px"});
-  const drawAreas=()=>{
-    clear(chips);
-    for(const a of areaList()) chips.append(el("span",{class:"chip acc"},a,
-      el("button",{class:"x",title:"Remove "+a,onclick:()=>{
-        S.config.areas=areaList().filter(x=>x!==a); saveConfig(); reflow();
-      }},"×")));
-    if(!areaList().length) chips.append(el("span",{class:"hint"},
-      "None yet — add the bays, racks and cool rooms you count against."));
-  };
-  drawAreas();
-  const inp=el("input",{type:"text",placeholder:"Cool room rack 3",style:"max-width:240px"});
-  const add=()=>{
-    const v=inp.value.trim(); if(!v) return;
-    if(areaList().includes(v)){flash("Already on the list");return;}
-    S.config.areas=[...areaList(),v]; saveConfig(); inp.value=""; drawAreas(); reflow();
-  };
-  inp.addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();add();}});
-  ab.append(chips,el("div",{class:"row",style:"gap:8px"},inp,
-    el("button",{class:"btn",onclick:add},"Add area")));
-  ac.append(ab); pane.append(ac);
 
   /* locations */
   const lc=el("div",{class:"card"});
