@@ -77,6 +77,8 @@ button,input,select,textarea{font:inherit;color:inherit}
 .sync i{width:6px;height:6px;border-radius:50%;background:var(--faint);flex:none}
 .sync.on i{background:var(--ok)}
 .sync.off i{background:var(--warn)}
+.sync.warn i{background:var(--warn)}
+.sync.warn{color:var(--warn);font-weight:600}
 .bld{font:500 10.5px/1.4 var(--mono);color:var(--faint);letter-spacing:.02em}
 /* a SKU's colour, wherever the SKU is named */
 .sw{width:10px;height:10px;border-radius:3px;flex:none;display:inline-block;
@@ -107,6 +109,20 @@ table.mini td.num,table.mini th.num{text-align:right;font-family:var(--mono)}
 .fg td.inp.nowcol input{background:transparent}
 .fg td.inp.nowcol.edited input{background:var(--accent-soft)}
 .fg td.adj{color:var(--accent-ink);font-weight:600}
+/* the batch sheet */
+table.bsheet th.grp{text-align:center;background:var(--sunk);border-left:2px solid var(--line);
+  font-size:10px;letter-spacing:.1em}
+table.bsheet th.grp.erp{background:var(--warn-soft);color:var(--warn)}
+table.bsheet th.pk{font-size:9.5px;white-space:nowrap}
+table.bsheet th.pk.erp{color:var(--warn)}
+table.bsheet th.stick,table.bsheet td.stick{position:sticky;left:0;z-index:4;
+  background:var(--surface);min-width:150px;max-width:150px}
+table.bsheet th.stick2,table.bsheet td.stick2{position:sticky;left:150px;z-index:4;
+  background:var(--surface);min-width:132px;max-width:132px}
+table.bsheet thead th.stick,table.bsheet thead th.stick2{z-index:8;background:var(--surface-2)}
+table.bsheet input.batch{width:118px;font-size:11.5px;letter-spacing:0}
+table.bsheet td.cell input.num{width:52px}
+table.bsheet tbody tr:hover td{background:var(--surface-2)}
 /* a figure that is still the plan, not an actual */
 .fg td.plan{color:var(--muted);font-style:italic}
 .fg td.inp.plan input::placeholder{color:var(--muted);opacity:1;font-style:italic}
@@ -403,7 +419,7 @@ dialog footer{padding:12px 16px;border-top:1px solid var(--line-soft);display:fl
 /* Which build this is. It shows at the bottom of the sidebar and on Setup, so
    there is never any doubt about whether a deploy actually landed: if the
    stamp hasn't changed after deploying, the browser is still on the old file. */
-const BUILD="2026-10-27 · two sheds, keg pools, batch codes off the run";
+const BUILD="2026-11-02 · keeps counting with no signal, batch sheet";
 /* ============================ helpers ============================ */
 const $ = (s,r)=> (r||document).querySelector(s);
 const el = (t,a,...k)=>{const n=document.createElement(t);
@@ -500,20 +516,76 @@ function localLoad(){try{const r=JSON.parse(localStorage.getItem(LS)||"null");if
   Object.assign(S.config,r.config||{});S.products=r.products||[];S.locations=r.locations||[];
   S.plan=r.plan||{};S.stock=r.stock||[];S.runs=r.runs||[];return S.products.length>0;}catch(e){return false;}}
 
+/* ---- the outbox ----
+   There is no signal in the coldroom. Every change is written to this device
+   first and queued; the queue drains to the server whenever there is a
+   connection, and survives a reload, a flat battery and a closed laptop. The
+   server is never the only copy of something somebody typed. */
+const OUT="coldroom-outbox-v1";
+let outbox=[];
+function outLoad(){ try{ outbox=JSON.parse(localStorage.getItem(OUT)||"[]")||[]; }catch(e){ outbox=[]; } }
+function outSave(){ try{ localStorage.setItem(OUT,JSON.stringify(outbox)); }catch(e){} }
+function pendingDoc(kind,id){ return outbox.some(x=>x.kind===kind&&String(x.id)===String(id)); }
+function outQueue(op,kind,id,doc){
+  /* one entry per document: the newest version of it is the one that matters */
+  outbox=outbox.filter(x=>!(x.kind===kind&&String(x.id)===String(id)));
+  outbox.push({op,kind,id:String(id),doc:doc||null,at:Date.now()});
+  outSave(); syncChip();
+}
+function syncChip(){
+  if(!S.backend){ setSync("off","This device only"); return; }
+  if(outbox.length){
+    setSync("warn",outbox.length+" change"+(outbox.length===1?"":"s")+" waiting to save");
+  } else setSync("on",S.backend.label);
+}
+/* Two people can be counting at once, one of them offline. When a queued
+   stocktake finally goes up, fold it into whatever the server has rather than
+   flattening the other person's lines. */
+async function mergeStocktake(doc){
+  try{
+    const rows=await S.backend.list("stocktakes");
+    const theirs=rows.find(r=>r.id===doc.id);
+    if(!theirs||!Array.isArray(theirs.entries)) return doc;
+    const mine=new Map((doc.entries||[]).map(e=>[e.id,e]));
+    const merged=(doc.entries||[]).slice();
+    for(const e of theirs.entries) if(!mine.has(e.id)) merged.push(e);
+    return Object.assign({},doc,{entries:merged});
+  }catch(e){ return doc; }
+}
+let flushing=false;
+async function flushOutbox(){
+  if(flushing||!S.backend||!outbox.length) return;
+  flushing=true;
+  try{
+    while(outbox.length){
+      const x=outbox[0];
+      if(x.op==="del") await S.backend.del(x.kind,x.id);
+      else await S.backend.set(x.kind,x.kind==="stocktakes"?await mergeStocktake(x.doc):x.doc);
+      /* drop the exact item that went up. If a newer version of the same
+         document was queued while this one was in flight, that newer one is a
+         different object and stays in the queue to be sent next — shifting
+         blindly here would have thrown it away. */
+      const i=outbox.indexOf(x);
+      if(i>=0) outbox.splice(i,1);
+      outSave(); syncChip();
+    }
+  }catch(e){
+    if(e&&e.auth) flash("Your passphrase was rejected — reload to sign in again");
+    syncChip();
+  }finally{ flushing=false; }
+}
 let saveTimer=null;
 function persist(kind,doc){
   S.calcCache=null;
-  if(S.backend){
-    Promise.resolve(S.backend.set(kind,JSON.parse(JSON.stringify(doc))))
-      .catch(e=>flash(e&&e.auth?"Your passphrase was rejected — reload to sign in again"
-                                :"Couldn't save to the server — kept on this device for now"));
-  }
+  if(S.backend) outQueue("set",kind,doc.id,JSON.parse(JSON.stringify(doc)));
   clearTimeout(saveTimer);saveTimer=setTimeout(localSave,400);
+  flushOutbox();
 }
 function remove(kind,id){
   S.calcCache=null;
-  if(S.backend) Promise.resolve(S.backend.del(kind,id)).catch(()=>{});
+  if(S.backend) outQueue("del",kind,id,null);
   clearTimeout(saveTimer);saveTimer=setTimeout(localSave,400);
+  flushOutbox();
 }
 function setSync(cls,txt){const s=$("#sync");s.className="sync "+cls;s.lastChild.textContent=txt;}
 let toastT=null;
@@ -531,17 +603,52 @@ async function loadAll(){
   if(pl&&pl.length) pl.forEach(p=>S.plan[p.id]=p);
   if(st&&st.length) S.stock=st;
   if(ru&&ru.length) S.runs=ru;
+  /* anything still queued on this device is newer than what came back */
+  applyOutbox();
   S.products.sort((a,b2)=>(a.sort|0)-(b2.sort|0));
   S.locations.sort((a,b2)=>(a.sort|0)-(b2.sort|0));
   S.stock.sort((a,b2)=>a.weekStart<b2.weekStart?1:-1);
   b.watch("stocktakes",rows=>{
-    if(rows.length&&S.ready){S.stock=rows.sort((a,b2)=>a.weekStart<b2.weekStart?1:-1);
-      S.calcCache=null; if(S.view==="stocktake"||S.view==="ageing")render();}
+    if(!rows.length||!S.ready) return;
+    /* a count queued here but not yet saved beats the server's older copy */
+    const keep=new Map(S.stock.filter(x=>pendingDoc("stocktakes",x.id)).map(x=>[x.id,x]));
+    const merged=rows.map(r=>keep.get(r.id)||r);
+    for(const [id,doc] of keep) if(!merged.some(r=>r.id===id)) merged.push(doc);
+    S.stock=merged.sort((a,b2)=>a.weekStart<b2.weekStart?1:-1);
+    S.calcCache=null; if(S.view==="stocktake"||S.view==="ageing")render();
   });
 }
+/* put every queued change back over the top of what the server just gave us */
+function applyOutbox(){
+  for(const x of outbox){
+    if(x.op==="del"){
+      if(x.kind==="stocktakes") S.stock=S.stock.filter(d=>d.id!==x.id);
+      if(x.kind==="runs") S.runs=S.runs.filter(d=>d.id!==x.id);
+      if(x.kind==="products") S.products=S.products.filter(d=>d.id!==x.id);
+      if(x.kind==="locations") S.locations=S.locations.filter(d=>d.id!==x.id);
+      continue;
+    }
+    const d=x.doc; if(!d) continue;
+    if(x.kind==="config") Object.assign(S.config,d);
+    else if(x.kind==="history") S.hist[d.id]=d;
+    else if(x.kind==="plan") S.plan[d.id]=d;
+    else if(x.kind==="products") S.products=upsert(S.products,d);
+    else if(x.kind==="locations") S.locations=upsert(S.locations,d);
+    else if(x.kind==="runs") S.runs=upsert(S.runs,d);
+    else if(x.kind==="stocktakes") S.stock=upsert(S.stock,d);
+  }
+  if(outbox.length) S.calcCache=null;
+}
+const upsert=(arr,doc)=>{const i=arr.findIndex(x=>x.id===doc.id);
+  if(i<0) return arr.concat([doc]);
+  const out=arr.slice(); out[i]=doc; return out;};
 
 async function boot(){
   const bl=$("#bld"); if(bl) bl.textContent="build "+BUILD.split(" · ")[0];
+  /* so a refresh in the coldroom, with no signal, still opens the app */
+  if("serviceWorker" in navigator)
+    navigator.serviceWorker.register("/sw.js").catch(()=>{});
+  outLoad();
   localLoad();
   let b=null;
   try{ b=await openBackend(); }catch(e){}
@@ -550,7 +657,16 @@ async function boot(){
   if(b){
     setSync("on",b.label);
     try{ await loadAll(); }
-    catch(e){ setSync("off","Offline — changes are saved on this device"); }
+    catch(e){ applyOutbox(); setSync("off","Offline — changes are saved on this device"); }
+    /* drain whatever was typed while the connection was down */
+    flushOutbox();
+    setInterval(flushOutbox,15000);
+    window.addEventListener("online",()=>{flash("Back online — saving what you typed");flushOutbox();});
+    window.addEventListener("beforeunload",e=>{
+      if(!outbox.length) return;
+      e.preventDefault(); e.returnValue="";   /* changes still waiting to save */
+    });
+    syncChip();
   } else {
     S.mode="local"; setSync("off","This device only");
   }
@@ -911,8 +1027,12 @@ async function openBackend(){
   }
   const b=restBackend();
   try{ await b.list("config"); return b; }
-  catch(e){ if(e&&e.auth){ b.needsKey=true; return b; } }
-  return null;
+  catch(e){
+    if(e&&e.auth){ b.needsKey=true; return b; }
+    /* no signal — this is still the right backend, it just can't be reached
+       yet. Saying "local only" here is what used to lose a morning's count. */
+    b.offline=true; return b;
+  }
 }
 
 /* ---- import the data file shipped with the site ----
@@ -1667,6 +1787,13 @@ function viewForecast(pane,ctl){
   if(which==="noncore") ctl.append(el("button",{class:"btn",
     title:"Choose which beers sit in the non-core range",
     onclick:editRange},"Choose the range"));
+  /* typing in a whole distributor's figures without scrolling the grid */
+  {const rep=S.locations.filter(l=>l.active!==false&&reportsOwn(l.id)&&
+      (l.type==="distributor"||l.type==="retail"));
+   if(rep.length) ctl.append(sel([["","Enter their stock on hand…"],
+     ...rep.map(l=>[l.id,l.name+" — enter stock on hand"])],"",
+     {title:"One list, one figure per beer, for this week",
+      onchange:e=>{const v=e.target.value; e.target.value=""; if(v) enterSOH(v);}}));}
   ctl.append(el("span",{class:"hint"},"Horizon"));
   ctl.append(sel([[13,"13 weeks"],[26,"26 weeks"],[52,"52 weeks"]],S.config.horizon,
     {onchange:e=>{S.config.horizon=+e.target.value;S.calcCache=null;saveConfig();render();}}));
@@ -2591,6 +2718,16 @@ function viewStocktake(pane,ctl){
      onclick:()=>{stRecountOnly=!stRecountOnly;render();}},
     stRecountOnly?("Showing "+recountCount(st)+" to re-count — show all")
                  :("Re-count ("+recountCount(st)+")")));
+  if(st){
+    const brands=[...new Set((st.entries||[]).filter(e=>!reportsOwn(e.locationId))
+      .map(e=>e.productId))]
+      .map(id=>[id,(P(id)||{name:id}).name]).sort((a,b)=>a[1].localeCompare(b[1]));
+    ctl.append(sel([["","Every beer"],...brands],stBrand,
+      {title:"Show one beer at a time",onchange:e=>{stBrand=e.target.value;render();}}));
+    ctl.append(el("button",{class:"btn"+(stErp?" pri":""),
+      title:"Show what the ERP holds beside what was counted",
+      onclick:()=>{stErp=!stErp;render();}},stErp?"ERP columns on":"ERP columns"));
+  }
   ctl.append(el("button",{class:"btn pri",onclick:newStocktake},"New stocktake"));
   if(!st){
     pane.append(el("div",{class:"card"},el("div",{class:"empty"},el("b",{},"No stocktakes yet"),
@@ -2606,7 +2743,8 @@ function viewStocktake(pane,ctl){
   const nDiff=recountCount(st), nWhy=unexplained(st);
   if(nDiff) t.append(tile("Against the ERP",String(nDiff),
     nWhy?(nWhy+" still need a reason"):"all explained",nWhy?"warn":"ok"));
-  const locOrder=Object.keys(byLoc).sort((a,b)=>((L(a)||{}).sort|0)-((L(b)||{}).sort|0));
+  const locOrder=Object.keys(byLoc).filter(lid=>!reportsOwn(lid))
+    .sort((a,b)=>(a==="coldroom"?-1:b==="coldroom"?1:((L(a)||{}).sort|0)-((L(b)||{}).sort|0)));
   for(const lid of locOrder.slice(0,nDiff?4:5)){
     const rows=byLoc[lid],ctns=sum(rows.filter(r=>r.pack==="Can"||r.pack==="10 Pack").map(r=>r.qty)),
       kegs=sum(rows.filter(r=>r.pack==="Keg").map(r=>r.qty)),k30=sum(rows.filter(r=>r.pack==="30L Keg").map(r=>r.qty));
@@ -2647,131 +2785,240 @@ function viewStocktake(pane,ctl){
     tb.append(body);w.append(tb);m.append(w);pane.append(m);
   }
 
-  for(const lid of locOrder){
-    const loc=L(lid)||{name:lid,type:"distributor"};
-    const rows=byLoc[lid].slice().sort((a,b)=>(a.productId+a.pack).localeCompare(b.productId+b.pack));
+  /* the coldroom first, then anywhere else we count ourselves. The places that
+     report their own figure are typed into the forecast, not counted here. */
+  const sheet=locOrder.filter(lid=>!reportsOwn(lid));
+  sheet.sort((a,b)=>(a==="coldroom"?-1:b==="coldroom"?1:((L(a)||{}).sort|0)-((L(b)||{}).sort|0)));
+  for(const lid of sheet){
+    const loc=L(lid)||{name:lid,type:"internal"};
+    const rows=batchRows(st,lid).filter(r=>!stBrand||r.productId===stBrand)
+      .filter(r=>!stRecountOnly||rowNeedsRecount(st,r));
     const c=el("div",{class:"card"});
+    const counted=sum(batchRows(st,lid).map(r=>sum(r.entries.map(e=>e.qty||0))));
     c.append(el("header",{},el("h3",{},loc.name),
       el("span",{class:"chip acc"},LOCTYPE[loc.type]||"Location"),
-      reportsOwn(lid)?el("span",{class:"chip warn",
-        title:"They report their own stock on hand — type it into the forecast grid. "+
-              "Anything counted here is kept as a record but doesn't move the forecast."},
-        "reported, not counted"):null,
-      el("span",{class:"chip"},rows.length+" lines"),
+      el("span",{class:"chip"},rows.length+" batch"+(rows.length===1?"":"es")),
       el("span",{style:"flex:1"}),
-      el("span",{class:"chip"},n0(sum(rows.map(r=>r.qty)))+" counted"),
-      el("button",{class:"btn sm",onclick:()=>editEntry(st,{locationId:lid})},"Add line")));
-    const w=el("div",{class:"scroll tall"}), tb=el("table");
-    const kegs=rows.some(r=>hasFleet(r.pack));
-    tb.append(el("thead",{},el("tr",{},el("th",{},"Product"),el("th",{},"Pack"),
-      kegs?el("th",{title:"Which keg pool this lot belongs to"},"Keg"):null,
-      el("th",{},"Batch"),
-      el("th",{class:"num"},"Last week"),
-      ...COUNT_AREAS.map(a=>el("th",{class:"num",title:"Counted at "+a},a)),
-      el("th",{class:"num",title:"The two sheds added up — this is what the ERP is compared with"},"Count"),
-      el("th",{class:"num"},"ERP"),el("th",{class:"num"},"Diff"),
-      el("th",{},"Note"),el("th",{title:"Flag this line to be counted again"},"Re-count"),
-      el("th",{},"Best before"),el("th",{},"Send by"),
-      el("th",{class:"num"},"Days left"),el("th",{},""))));
+      el("span",{class:"chip"},nq(counted)+" counted"),
+      el("button",{class:"btn sm",onclick:()=>addBatchRow(st,lid)},"Add batch")));
+    if(!rows.length){
+      c.append(el("div",{class:"empty"},el("b",{},"Nothing on this sheet yet"),
+        stBrand?"No batches of that beer here — clear the filter to see the rest."
+               :"Add a batch, or create next week's sheet from last week's."));
+      pane.append(c); continue;
+    }
+    const w=el("div",{class:"scroll tall"}), tb=el("table",{class:"bsheet"});
+    /* two header rows: the shed above, the packs beneath it */
+    const h1=el("tr",{},
+      el("th",{class:"stick",rowspan:"2"},"Beer"),
+      el("th",{class:"stick2",rowspan:"2"},"Batch"));
+    const h2=el("tr",{});
+    for(const shed of COUNT_AREAS){
+      h1.append(el("th",{class:"grp",colspan:String(PACKCOLS.length)},shed));
+      for(const pc of PACKCOLS) h2.append(el("th",{class:"num pk"},pc.label));
+    }
+    if(stErp){
+      h1.append(el("th",{class:"grp erp",colspan:String(PACKCOLS.length)},"ERP"));
+      for(const pc of PACKCOLS) h2.append(el("th",{class:"num pk erp"},pc.label));
+    }
+    h1.append(el("th",{rowspan:"2"},"Best before"),el("th",{class:"num",rowspan:"2"},"Days"),
+      el("th",{rowspan:"2"},""));
+    tb.append(el("thead",{},h1,h2));
     const body=el("tbody");
-    for(const e of rows){
-      if(stRecountOnly&&!needsRecount(e)) continue;
-      const F=partUnits(e.productId,e.pack)?nq:n0;
-      const sm=shelfMonths(e.productId,e.pack);
-      const sb=e.bestBefore?iso(new Date(D(e.bestBefore)-Math.round(sm/2*30.44)*DAY)):null;
+    for(const r of rows){
+      const sm=shelfMonths(r.productId,(r.entries[0]||{}).pack||"Can");
+      const sb=r.bestBefore?iso(new Date(D(r.bestBefore)-Math.round(sm/2*30.44)*DAY)):null;
       const d=sb?dDiff(S.config.currentWeek,sb):null;
-      /* one box per shed; the line's figure is the two added up */
-      const areaIn=COUNT_AREAS.map(a=>el("input",{class:"cellinp num qty",type:"text",
-        inputmode:"decimal",
-        value:areaQty(e,a)!=null?F(areaQty(e,a)):"", placeholder:"—",
-        title:"Counted at "+a+" — leave blank until it's counted, type 0 for a bay with none in it",
-        onfocus:ev=>ev.target.select(),
-        onkeydown:ev=>stepCell(ev),
-        onchange:ev=>{setAreaQty(st,e,a,ev.target.value);reflow();}}));
-      const total=el("span",{class:"num"+(unsplit(e)?" dim":"")},
-        e.qty!=null?F(e.qty):"—");
-      if(unsplit(e)) total.title="Counted before the sheds were split out. "
-        +"Type a figure into either shed and this becomes the two added up.";
-      const fleet=hasFleet(e.pack)?sel([["","—"],...KEG_FLEETS.map(f=>[f,f])],e.fleet||"",
-        {class:"cellinp",title:"Which keg pool this lot belongs to",
-         onchange:ev=>{const v=ev.target.value; if(v) e.fleet=v; else delete e.fleet; stSave(st);}})
-        :null;
-      const sku=skuId(e.productId,e.pack);
-      const known=knownBatches(sku);
-      const listId="bl-"+e.id;
-      const bat=el("input",{class:"cellinp mono",type:"text",value:e.batch||"",placeholder:"batch",
-        list:known.length?listId:null,
-        title:known.length?"Codes already recorded on a packaging run or an earlier count":"",
-        onkeydown:ev=>stepCell(ev),
-        onchange:ev=>{
-          e.batch=ev.target.value.trim();
-          /* a code we already know brings its best before with it */
-          const hit=known.find(x=>x.code===e.batch);
-          if(hit&&hit.bb&&!e.bestBefore){ e.bestBefore=hit.bb; stSave(st); render(); return; }
-          stSave(st);}});
-      const dl=known.length?el("datalist",{id:listId},
-        ...known.slice(0,40).map(x=>el("option",{value:x.code}))):null;
-      const bb=el("input",{class:"cellinp mono",type:"date",value:e.bestBefore||"",
-        onchange:ev=>{e.bestBefore=ev.target.value||null;stSave(st);render();}});
-      /* what the ERP says it holds, against what was counted */
-      const erp=el("input",{class:"cellinp num",type:"text",inputmode:"decimal",
-        value:e.erp!=null?F(e.erp):"",placeholder:"—",
-        title:"What the ERP says for this batch",
-        onfocus:ev=>ev.target.select(), onkeydown:ev=>stepCell(ev),
-        onchange:ev=>{const v=num(ev.target.value); if(v==null) delete e.erp; else e.erp=v;
-          stSave(st);reflow();}});
-      const diff=(e.qty!=null&&e.erp!=null)?Math.round((e.qty-e.erp)*100)/100:null;
-      const prev=lastWeekQty(st,e);
-      /* a line that disagrees with the ERP needs a reason before it's settled */
-      const owes=!!diff&&!(e.note||"").trim();
-      const note=el("input",{class:"cellinp"+(owes?" owes":""),type:"text",
-        value:e.note||"",
-        placeholder:owes?"why the difference?":"note",
-        title:owes?"This line disagrees with the ERP — say why before it's signed off"
-                  :"Anything worth remembering about this line",
+      const tr=el("tr",{class:"stripe "+(d==null?"":d<=0?"crit":d<=28?"warn":"")});
+      tr.append(el("td",{class:"stick"},swatch(r.productId),
+        (P(r.productId)||{name:r.productId}).name));
+      tr.append(el("td",{class:"cell stick2"},el("input",{class:"cellinp mono batch",type:"text",
+        value:r.batch||"",placeholder:"batch code",
+        title:"The batch code as it is on the pallet",
         onkeydown:ev=>stepCell(ev),
         onchange:ev=>{const v=ev.target.value.trim();
-          if(v) e.note=v; else delete e.note; stSave(st); reflow();}});
-      const rc=el("input",{type:"checkbox",class:"rc",checked:!!e.recount,
-        title:"Count this one again",
-        onchange:ev=>{if(ev.target.checked) e.recount=true; else delete e.recount;
-          stSave(st); reflow();}});
-      body.append(el("tr",{class:"stripe "+(e.recount?"warn ":"")+(d==null?"":d<=0?"crit":d<=28?"warn":""),
-          "data-zero":String(e.qty==null)},
-        el("td",{},swatch(e.productId),(P(e.productId)||{name:e.productId}).name),
-        el("td",{class:"dim"},e.pack),
-        kegs?el("td",{class:"cell"},fleet):null,
-        el("td",{class:"cell"},bat,dl),
-        el("td",{class:"num dim",title:"Counted in the previous stocktake"},prev==null?"—":F(prev)),
-        ...areaIn.map(i=>el("td",{class:"cell"},i)),
-        el("td",{class:"num tot"},total),
-        el("td",{class:"cell"},erp),
-        el("td",{class:"num"+(diff?" neg":"")},diff==null?"—":(diff>0?"+":"")+F(diff)),
-        el("td",{class:"cell"},note),
-        el("td",{class:"cell mid"},rc),
-        el("td",{class:"cell"},bb),
-        el("td",{class:"mono dim"},fmtD(sb)),
-        el("td",{class:"num"},d==null?"—":String(d)),
-        el("td",{},el("button",{class:"btn sm",title:"Remove this line",
-          onclick:()=>{if(!confirm("Remove this line from the stocktake?"))return;
-            st.entries=st.entries.filter(x=>x.id!==e.id);stSave(st);render();}},"×"))));
+          for(const e of r.entries) e.batch=v;
+          stSave(st); render();}})));
+      for(const shed of COUNT_AREAS) for(const pc of PACKCOLS){
+        const e=cellEntry(st,lid,r,pc,false);
+        const v=e&&e.counts?e.counts[shed]:undefined;
+        tr.append(el("td",{class:"cell"},el("input",{class:"cellinp num qty",type:"text",
+          inputmode:"decimal",value:v!=null?nq(v):"",placeholder:"·",
+          title:pc.label+" at "+shed+" — blank means nobody has been to it, 0 means none there",
+          onfocus:ev=>ev.target.select(), onkeydown:ev=>stepCell(ev),
+          onchange:ev=>{setAreaQty(st,cellEntry(st,lid,r,pc,true),shed,ev.target.value);
+            reflow();}})));
+      }
+      if(stErp) for(const pc of PACKCOLS){
+        const e=cellEntry(st,lid,r,pc,false);
+        const diff=e?stDiff(e):null;
+        tr.append(el("td",{class:"cell"},el("input",{class:"cellinp num"+(diff?" owes":""),
+          type:"text",inputmode:"decimal",value:e&&e.erp!=null?nq(e.erp):"",placeholder:"·",
+          title:diff?("Counted "+nq(e.qty)+", ERP says "+nq(e.erp)+" — "+(diff>0?"+":"")+nq(diff))
+                    :("What the ERP holds for this batch in "+pc.label),
+          onfocus:ev=>ev.target.select(), onkeydown:ev=>stepCell(ev),
+          onchange:ev=>{const t=cellEntry(st,lid,r,pc,true);
+            const v=num(ev.target.value);
+            if(v==null) delete t.erp; else t.erp=v;
+            stSave(st); reflow();}})));
+      }
+      tr.append(el("td",{class:"cell"},el("input",{class:"cellinp mono",type:"date",
+        value:r.bestBefore||"",
+        onchange:ev=>{const v=ev.target.value||null;
+          for(const e of r.entries) e.bestBefore=v;
+          stSave(st); render();}})));
+      tr.append(el("td",{class:"mono dim"},d==null?"—":String(d)));
+      tr.append(el("td",{},el("button",{class:"btn sm",title:"Remove this batch from the sheet",
+        onclick:()=>{if(!confirm("Remove batch "+(r.batch||"—")+" from the sheet?"))return;
+          const ids=new Set(r.entries.map(e=>e.id));
+          st.entries=(st.entries||[]).filter(x=>!ids.has(x.id));
+          stSave(st); render();}},"×")));
+      body.append(tr);
     }
-    if(!body.children.length) continue;      /* nothing here to re-count */
     tb.append(body); w.append(tb); c.append(w); pane.append(c);
   }
+
+  /* ---- what we have, by SKU ----
+     The batch lines are for counting; this is the number anyone actually
+     wants, and where a difference against the ERP gets explained. */
+  const tot=skuTotals(st);
+  if(tot.length){
+    const c=el("div",{class:"card"});
+    const bad=tot.filter(x=>x.diff);
+    c.append(el("header",{},el("h3",{},"Stock on hand"),
+      el("span",{class:"chip"},tot.length+" SKUs"),
+      bad.length?el("span",{class:"chip warn"},bad.length+" against the ERP"):null,
+      el("span",{style:"flex:1"}),
+      el("span",{class:"hint"},"Every batch and both sheds added up")));
+    const w=el("div",{class:"scroll tall"}), tb=el("table");
+    tb.append(el("thead",{},el("tr",{},el("th",{},"SKU"),
+      el("th",{class:"num"},"On hand"),el("th",{class:"num"},"ERP"),el("th",{class:"num"},"Diff"),
+      el("th",{},"Why"),el("th",{title:"Count this one again"},"Re-count"))));
+    const body=el("tbody");
+    for(const x of tot){
+      if(stBrand&&x.productId!==stBrand) continue;
+      const meta=skuMeta(st,x.id);
+      const owes=!!x.diff&&!(meta.note||"").trim();
+      body.append(el("tr",{class:"stripe "+(meta.recount?"warn":"")},
+        el("td",{},swatch(x.productId),el("b",{},x.label)),
+        el("td",{class:"num"},el("b",{},nq(x.count))),
+        el("td",{class:"num dim"},x.erp==null?"—":nq(x.erp)),
+        el("td",{class:"num"+(x.diff?" neg":"")},x.diff?((x.diff>0?"+":"")+nq(x.diff)):"—"),
+        el("td",{class:"cell"},el("input",{class:"cellinp"+(owes?" owes":""),type:"text",
+          value:meta.note||"",placeholder:owes?"why the difference?":"note",
+          onchange:ev=>{setSkuMeta(st,x.id,{note:ev.target.value.trim()});reflow();}})),
+        el("td",{class:"cell mid"},el("input",{type:"checkbox",class:"rc",checked:!!meta.recount,
+          onchange:ev=>{setSkuMeta(st,x.id,{recount:ev.target.checked});reflow();}}))));
+    }
+    tb.append(body); w.append(tb); c.append(w); pane.append(c);
+  }
+}
+
+/* ---- the sheet's shape ----
+   A row is one batch of one beer in one place. The columns across it are the
+   pack it was filled into and, for kegs, whose keg it is. */
+const PACKCOLS=[
+  {k:"Can",                label:"Carton",     pack:"Can"},
+  {k:"10 Pack",            label:"10 Pack",    pack:"10 Pack"},
+  {k:"Keg|Konvoy",         label:"50L Konvoy", pack:"Keg",     fleet:"Konvoy"},
+  {k:"Keg|Your Mates",     label:"50L Mates",  pack:"Keg",     fleet:"Your Mates"},
+  {k:"30L Keg|Konvoy",     label:"30L Konvoy", pack:"30L Keg", fleet:"Konvoy"},
+  {k:"30L Keg|Your Mates", label:"30L Mates",  pack:"30L Keg", fleet:"Your Mates"}];
+const colKey=e=>hasFleet(e.pack)?(e.pack+"|"+(e.fleet||"Konvoy")):e.pack;
+function batchRows(st,locId){
+  const by=new Map();
+  for(const e of (st.entries||[])){
+    if(e.locationId!==locId) continue;
+    const k=e.productId+"|"+(e.batch||"");
+    if(!by.has(k)) by.set(k,{key:k,productId:e.productId,batch:e.batch||"",
+                             bestBefore:e.bestBefore||null,entries:[]});
+    const r=by.get(k);
+    r.entries.push(e);
+    if(!r.bestBefore&&e.bestBefore) r.bestBefore=e.bestBefore;
+  }
+  return [...by.values()].sort((a,b)=>{
+    const an=(P(a.productId)||{}).name||a.productId, bn=(P(b.productId)||{}).name||b.productId;
+    return an===bn?String(a.batch).localeCompare(String(b.batch)):an.localeCompare(bn);
+  });
+}
+/* the line behind one cell — made only when somebody types in it */
+function cellEntry(st,locId,row,pc,make){
+  let e=row.entries.find(x=>colKey(x)===pc.k);
+  if(e||!make) return e;
+  e={id:uid("e"),productId:row.productId,pack:pc.pack,locationId:locId,
+     batch:row.batch||"",bestBefore:row.bestBefore||null};
+  if(pc.fleet) e.fleet=pc.fleet;
+  st.entries=st.entries||[]; st.entries.push(e); row.entries.push(e);
+  return e;
+}
+function addBatchRow(st,locId){
+  openDialog("Add a batch",b=>{
+    const prods=S.products.slice().sort((a,b2)=>a.name.localeCompare(b2.name));
+    b.append(el("div",{class:"grid3"},
+      field("Beer",sel(prods.map(p=>[p.id,p.name]),prods[0]&&prods[0].id,{id:"abp"})),
+      field("Batch code",el("input",{type:"text",id:"abb",placeholder:"260075"})),
+      field("Best before",el("input",{type:"date",id:"abd"}))));
+    b.append(el("div",{class:"note"},"The row goes on the sheet empty — type what you count "+
+      "into the pack and shed it is in."));
+  },body=>{
+    const pid=$("#abp",body).value, code=$("#abb",body).value.trim();
+    if(!code){flash("It needs a batch code");return false;}
+    const bb=$("#abd",body).value||null;
+    st.entries=st.entries||[];
+    if(st.entries.some(e=>e.locationId===locId&&e.productId===pid&&(e.batch||"")===code)){
+      flash("That batch is already on the sheet");return false;
+    }
+    st.entries.push({id:uid("e"),productId:pid,pack:"Can",locationId:locId,batch:code,bestBefore:bb});
+    persist("stocktakes",st);
+  },"Add");
+}
+/* ---- what each SKU adds up to ---- */
+function skuTotals(st){
+  const by=new Map();
+  for(const e of (st.entries||[])){
+    if(reportsOwn(e.locationId)) continue;
+    const id=skuId(e.productId,e.pack);
+    if(!by.has(id)) by.set(id,{id,productId:e.productId,pack:e.pack,
+      label:((P(e.productId)||{}).name||e.productId)+" "+e.pack,count:0,erp:null,diff:0});
+    const x=by.get(id);
+    if(e.qty!=null) x.count+=e.qty;
+    if(e.erp!=null) x.erp=(x.erp||0)+e.erp;
+  }
+  for(const x of by.values()){
+    x.count=Math.round(x.count*100)/100;
+    if(x.erp!=null){ x.erp=Math.round(x.erp*100)/100; x.diff=Math.round((x.count-x.erp)*100)/100; }
+  }
+  return [...by.values()].sort((a,b)=>a.label.localeCompare(b.label));
+}
+const skuMeta=(st,id)=>((st.skuNotes||{})[id])||{};
+function setSkuMeta(st,id,patch){
+  st.skuNotes=st.skuNotes||{};
+  const cur=Object.assign({},st.skuNotes[id]||{},patch);
+  if(!cur.note) delete cur.note;
+  if(!cur.recount) delete cur.recount;
+  if(Object.keys(cur).length) st.skuNotes[id]=cur; else delete st.skuNotes[id];
+  stSave(st);
+}
+function rowNeedsRecount(st,row){
+  return row.entries.some(e=>stDiff(e))||
+    row.entries.some(e=>skuMeta(st,skuId(e.productId,e.pack)).recount);
 }
 /* ---- lines that aren't settled ----
    A line disagreeing with the ERP, or flagged to be counted again. Re-count
    mode shows nothing else, so a recount is a short list rather than a hunt
    back through the whole sheet. */
-let stRecountOnly=false;
+let stRecountOnly=false, stBrand="", stErp=true;
 function stDiff(e){
   return (e.qty!=null&&e.erp!=null)?Math.round((e.qty-e.erp)*100)/100:null;
 }
 function needsRecount(e){ return !!e.recount||!!stDiff(e); }
-function recountCount(st){ return (st.entries||[]).filter(needsRecount).length; }
+/* counted at SKU level: that is where the ERP reports and where the reason goes */
+function recountCount(st){
+  const t=skuTotals(st);
+  return t.filter(x=>x.diff||skuMeta(st,x.id).recount).length;
+}
 function unexplained(st){
-  return (st.entries||[]).filter(e=>stDiff(e)&&!(e.note||"").trim()).length;
+  return skuTotals(st).filter(x=>x.diff&&!(skuMeta(st,x.id).note||"").trim()).length;
 }
 /* ---- what this line held last time ----
    Matched on the batch where there is one, since that is the same physical
@@ -2823,7 +3070,8 @@ function stSave(st){
   stTimer=setTimeout(()=>{ if(stPending){persist("stocktakes",stPending); stPending=null;} },700);
 }
 function stProgressText(st){
-  const n=(st.entries||[]).length, done=(st.entries||[]).filter(e=>e.qty!=null).length;
+  const mine=(st.entries||[]).filter(e=>!reportsOwn(e.locationId));
+  const n=mine.length, done=mine.filter(e=>e.qty!=null).length;
   return done+" of "+n+" lines counted";
 }
 /* Enter / arrows walk down the column so a count can be typed without the mouse */
@@ -3724,6 +3972,48 @@ function editAdjust(s,preset){
       t.append(body); b.append(t);
     }
   },()=>{render();},"Done");
+}
+/* ---- one distributor, one column ----
+   They send one figure per beer on a Monday. Going SKU by SKU across the grid
+   to type six numbers is a waste of a morning: this is the same thing as a
+   list, with last week's figure beside it so an obvious typo stands out. */
+function enterSOH(locId){
+  const loc=L(locId)||{name:locId};
+  const cw=S.config.currentWeek, last=wkAdd(cw,-1);
+  openDialog("Stock on hand — "+loc.name,b=>{
+    b.append(el("div",{class:"note"},el("b",{},"What "+loc.name+" reports holding, w/c "+
+      fmtWY(cw)+". "),"Their drawdown is worked out from it. Enter moves down the list; "+
+      "leave a beer blank and its week stays as a forecast."));
+    const rows=skus().filter(s=>channelsFor(s.id).has(locId));
+    if(!rows.length){ b.append(el("div",{class:"empty"},"No beers are set to ship to "+loc.name+".")); return; }
+    const t=el("table",{class:"mini"});
+    t.append(el("thead",{},el("tr",{},el("th",{},"Beer"),el("th",{class:"num"},"Last week"),
+      el("th",{class:"num"},"This week"),el("th",{class:"num"},"Their drawdown"))));
+    const body=el("tbody");
+    for(const s of rows){
+      const k=histLoc(s.id,"soh",locId);
+      const prev=at(s.id,"soh",k,last);
+      const now=at(s.id,"soh",k,cw);
+      const drew=el("td",{class:"num dim"},nq(at(s.id,"used",histLoc(s.id,"used",locId),cw)));
+      const inp=el("input",{class:"cellinp num",type:"text",inputmode:"decimal",
+        value:now!=null?nq(now):"",placeholder:"—","data-sku":s.id,
+        onfocus:ev=>ev.target.select(),
+        onkeydown:ev=>{if(ev.key!=="Enter"&&ev.key!=="ArrowDown"&&ev.key!=="ArrowUp")return;
+          ev.preventDefault();
+          const all=[...b.querySelectorAll("input[data-sku]")];
+          const i=all.indexOf(ev.target)+(ev.key==="ArrowUp"?-1:1);
+          if(all[i]){all[i].focus();all[i].select();}},
+        onchange:ev=>{setTheirSOH(s.id,locId,cw,ev.target.value);
+          drew.textContent=nq(at(s.id,"used",histLoc(s.id,"used",locId),cw));
+          S.calcCache=null;}});
+      body.append(el("tr",{},
+        el("td",{},swatch(s.product.id),s.product.name+" "+s.pack),
+        el("td",{class:"num dim"},prev==null?"—":nq(prev)),
+        el("td",{class:"cell"},inp),
+        drew));
+    }
+    t.append(body); b.append(t);
+  },()=>{S.calcCache=null;render();},"Done");
 }
 /* ---- returns ----
    Everything recorded about stock that came back from one channel, with the

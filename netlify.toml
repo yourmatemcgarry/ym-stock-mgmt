@@ -30,3 +30,10 @@
   for = "/index.html"
   [headers.values]
     Cache-Control = "no-store, must-revalidate"
+
+# The worker that keeps the app opening with no signal. It must never be
+# cached, or a stale one keeps serving a stale app.
+[[headers]]
+  for = "/sw.js"
+  [headers.values]
+    Cache-Control = "no-store, must-revalidate"
