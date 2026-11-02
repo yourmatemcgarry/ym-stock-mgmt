@@ -123,6 +123,14 @@ table.bsheet thead th.stick,table.bsheet thead th.stick2{z-index:8;background:va
 table.bsheet input.batch{width:118px;font-size:11.5px;letter-spacing:0}
 table.bsheet td.cell input.num{width:52px}
 table.bsheet tbody tr:hover td{background:var(--surface-2)}
+table.dist th.stick,table.dist td.stick{position:sticky;left:0;z-index:4;
+  background:var(--surface);min-width:190px}
+table.dist thead th.stick{z-index:8;background:var(--surface-2)}
+table.dist th.now{background:var(--accent-soft);color:var(--accent-ink)}
+table.dist td.now{background:var(--accent-soft)}
+table.dist td.cell{padding-right:6px}
+table.dist td.cell input{width:100%;min-width:70px}
+table.dist tbody tr:hover td{background:var(--surface-2)}
 /* a figure that is still the plan, not an actual */
 .fg td.plan{color:var(--muted);font-style:italic}
 .fg td.inp.plan input::placeholder{color:var(--muted);opacity:1;font-style:italic}
@@ -419,7 +427,7 @@ dialog footer{padding:12px 16px;border-top:1px solid var(--line-soft);display:fl
 /* Which build this is. It shows at the bottom of the sidebar and on Setup, so
    there is never any doubt about whether a deploy actually landed: if the
    stamp hasn't changed after deploying, the browser is still on the old file. */
-const BUILD="2026-11-02 · keeps counting with no signal, batch sheet";
+const BUILD="2026-11-02b · a page per distributor, reasons on the batch line";
 /* ============================ helpers ============================ */
 const $ = (s,r)=> (r||document).querySelector(s);
 const el = (t,a,...k)=>{const n=document.createElement(t);
@@ -1565,7 +1573,7 @@ function alerts(){
 <script>
 "use strict";
 /* ============================ nav / router ============================ */
-const ICONS={
+const ICONS={dist:'<path d="M3 7h18M3 12h18M3 17h18" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/>',
  forecast:'<path d="M3 3v18h18"/><path d="M7 14l4-5 3 3 5-7"/>',
  stocktake:'<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M9 8h6M9 12h6M9 16h3"/>',
  production:'<path d="M4 20V9l5 3V9l5 3V4l6 3v13z"/>',
@@ -1576,6 +1584,8 @@ const ICONS={
 const VIEWS=[
  {id:"forecast",label:"Forecast",title:"Forecast",sub:"Monday afternoon: what's going out this week, and the weeks after it"},
  {id:"noncore",label:"Non-core",title:"Non-core range",sub:"Seasonals, one-offs and anything that isn't part of the core range"},
+ {id:"dist",label:"Distributors",title:"By distributor",
+  sub:"One distributor at a time: what they hold, what they drew, what goes out"},
  {id:"stocktake",label:"Stocktake",title:"Weekly stocktake",sub:"Batch-level counts by location — the numbers everything else runs on"},
  {id:"production",label:"Production",title:"Production schedule",sub:"Planned packaging runs and the brew dates they imply"},
  {id:"ageing",label:"Aged stock",title:"Aged stock",sub:"Best before, send-by cut-offs and what needs moving"},
@@ -1690,6 +1700,7 @@ function render(){
   try{
     ({forecast:viewForecast,noncore:viewForecast,stocktake:viewStocktake,
       production:viewProduction,ageing:viewAgeing,review:viewReview,
+      dist:viewDistributor,
       setup:viewSetup}[S.view])(pane,ctl,v);
   }catch(e){
     console.error(e);
@@ -1787,13 +1798,6 @@ function viewForecast(pane,ctl){
   if(which==="noncore") ctl.append(el("button",{class:"btn",
     title:"Choose which beers sit in the non-core range",
     onclick:editRange},"Choose the range"));
-  /* typing in a whole distributor's figures without scrolling the grid */
-  {const rep=S.locations.filter(l=>l.active!==false&&reportsOwn(l.id)&&
-      (l.type==="distributor"||l.type==="retail"));
-   if(rep.length) ctl.append(sel([["","Enter their stock on hand…"],
-     ...rep.map(l=>[l.id,l.name+" — enter stock on hand"])],"",
-     {title:"One list, one figure per beer, for this week",
-      onchange:e=>{const v=e.target.value; e.target.value=""; if(v) enterSOH(v);}}));}
   ctl.append(el("span",{class:"hint"},"Horizon"));
   ctl.append(sel([[13,"13 weeks"],[26,"26 weeks"],[52,"52 weeks"]],S.config.horizon,
     {onchange:e=>{S.config.horizon=+e.target.value;S.calcCache=null;saveConfig();render();}}));
@@ -2821,7 +2825,10 @@ function viewStocktake(pane,ctl){
       h1.append(el("th",{class:"grp erp",colspan:String(PACKCOLS.length)},"ERP"));
       for(const pc of PACKCOLS) h2.append(el("th",{class:"num pk erp"},pc.label));
     }
-    h1.append(el("th",{rowspan:"2"},"Best before"),el("th",{class:"num",rowspan:"2"},"Days"),
+    h1.append(el("th",{class:"num",rowspan:"2",title:"Counted less what the ERP holds"},"Diff"),
+      el("th",{rowspan:"2"},"Why"),
+      el("th",{rowspan:"2",title:"Flag this batch to be counted again"},"Re-count"),
+      el("th",{rowspan:"2"},"Best before"),el("th",{class:"num",rowspan:"2"},"Days"),
       el("th",{rowspan:"2"},""));
     tb.append(el("thead",{},h1,h2));
     const body=el("tbody");
@@ -2862,6 +2869,22 @@ function viewStocktake(pane,ctl){
             if(v==null) delete t.erp; else t.erp=v;
             stSave(st); reflow();}})));
       }
+      /* what this batch is out by, pack for pack, and why */
+      const offs=r.entries.map(e=>({e,d:stDiff(e)})).filter(x=>x.d);
+      const meta=lineMeta(st,r,lid);
+      const owes=offs.length&&!(meta.note||"").trim();
+      tr.append(el("td",{class:"num"+(offs.length?" neg":"")},
+        offs.length?offs.map(x=>(x.d>0?"+":"")+nq(x.d)+" "+shortPack(x.e)).join(" · "):"—"));
+      tr.append(el("td",{class:"cell"},el("input",{class:"cellinp"+(owes?" owes":""),type:"text",
+        value:meta.note||"",
+        placeholder:owes?"why the difference?":"note",
+        title:owes?"This batch disagrees with the ERP — say why before it's signed off"
+                  :"Anything worth remembering about this batch",
+        onkeydown:ev=>stepCell(ev),
+        onchange:ev=>{setLineMeta(st,r,lid,{note:ev.target.value.trim()});reflow();}})));
+      tr.append(el("td",{class:"cell mid"},el("input",{type:"checkbox",class:"rc",
+        checked:!!meta.recount,title:"Count this batch again",
+        onchange:ev=>{setLineMeta(st,r,lid,{recount:ev.target.checked});reflow();}})));
       tr.append(el("td",{class:"cell"},el("input",{class:"cellinp mono",type:"date",
         value:r.bestBefore||"",
         onchange:ev=>{const v=ev.target.value||null;
@@ -2893,22 +2916,18 @@ function viewStocktake(pane,ctl){
     const w=el("div",{class:"scroll tall"}), tb=el("table");
     tb.append(el("thead",{},el("tr",{},el("th",{},"SKU"),
       el("th",{class:"num"},"On hand"),el("th",{class:"num"},"ERP"),el("th",{class:"num"},"Diff"),
-      el("th",{},"Why"),el("th",{title:"Count this one again"},"Re-count"))));
+      el("th",{class:"num"},"Batches"),el("th",{},"Where it's out"))));
     const body=el("tbody");
     for(const x of tot){
       if(stBrand&&x.productId!==stBrand) continue;
-      const meta=skuMeta(st,x.id);
-      const owes=!!x.diff&&!(meta.note||"").trim();
-      body.append(el("tr",{class:"stripe "+(meta.recount?"warn":"")},
+      const off=offLines(st,x.id);
+      body.append(el("tr",{class:"stripe "+(off.length?"warn":"")},
         el("td",{},swatch(x.productId),el("b",{},x.label)),
         el("td",{class:"num"},el("b",{},nq(x.count))),
         el("td",{class:"num dim"},x.erp==null?"—":nq(x.erp)),
         el("td",{class:"num"+(x.diff?" neg":"")},x.diff?((x.diff>0?"+":"")+nq(x.diff)):"—"),
-        el("td",{class:"cell"},el("input",{class:"cellinp"+(owes?" owes":""),type:"text",
-          value:meta.note||"",placeholder:owes?"why the difference?":"note",
-          onchange:ev=>{setSkuMeta(st,x.id,{note:ev.target.value.trim()});reflow();}})),
-        el("td",{class:"cell mid"},el("input",{type:"checkbox",class:"rc",checked:!!meta.recount,
-          onchange:ev=>{setSkuMeta(st,x.id,{recount:ev.target.checked});reflow();}}))));
+        el("td",{class:"num dim"},String(x.batches)),
+        el("td",{class:"dim mono"},off.length?off.join(", "):"—")));
     }
     tb.append(body); w.append(tb); c.append(w); pane.append(c);
   }
@@ -2979,10 +2998,12 @@ function skuTotals(st){
     if(reportsOwn(e.locationId)) continue;
     const id=skuId(e.productId,e.pack);
     if(!by.has(id)) by.set(id,{id,productId:e.productId,pack:e.pack,
-      label:((P(e.productId)||{}).name||e.productId)+" "+e.pack,count:0,erp:null,diff:0});
+      label:((P(e.productId)||{}).name||e.productId)+" "+e.pack,count:0,erp:null,diff:0,
+      batches:0,seen:new Set()});
     const x=by.get(id);
     if(e.qty!=null) x.count+=e.qty;
     if(e.erp!=null) x.erp=(x.erp||0)+e.erp;
+    if(e.batch&&!x.seen.has(e.batch)){ x.seen.add(e.batch); x.batches++; }
   }
   for(const x of by.values()){
     x.count=Math.round(x.count*100)/100;
@@ -2990,18 +3011,42 @@ function skuTotals(st){
   }
   return [...by.values()].sort((a,b)=>a.label.localeCompare(b.label));
 }
-const skuMeta=(st,id)=>((st.skuNotes||{})[id])||{};
-function setSkuMeta(st,id,patch){
-  st.skuNotes=st.skuNotes||{};
-  const cur=Object.assign({},st.skuNotes[id]||{},patch);
+/* ---- what was said about a batch ----
+   The reason a batch disagrees with the ERP belongs beside the batch code, not
+   rolled up to the SKU: that is the number somebody has to go and investigate. */
+const lineKey=(row,locId)=>locId+"|"+row.productId+"|"+(row.batch||"");
+const lineMeta=(st,row,locId)=>((st.lineNotes||{})[lineKey(row,locId)])||{};
+function setLineMeta(st,row,locId,patch){
+  st.lineNotes=st.lineNotes||{};
+  const k=lineKey(row,locId);
+  const cur=Object.assign({},st.lineNotes[k]||{},patch);
   if(!cur.note) delete cur.note;
   if(!cur.recount) delete cur.recount;
-  if(Object.keys(cur).length) st.skuNotes[id]=cur; else delete st.skuNotes[id];
+  if(Object.keys(cur).length) st.lineNotes[k]=cur; else delete st.lineNotes[k];
   stSave(st);
 }
+/* every batch line that is out against the ERP, for the whole sheet */
+function offRows(st){
+  const out=[];
+  for(const l of new Set((st.entries||[]).filter(e=>!reportsOwn(e.locationId))
+      .map(e=>e.locationId)))
+    for(const r of batchRows(st,l)){
+      const diff=r.entries.some(e=>stDiff(e));
+      const meta=lineMeta(st,r,l);
+      if(diff||meta.recount) out.push({row:r,loc:l,diff,meta});
+    }
+  return out;
+}
+/* which batches of a SKU are out, for the summary line */
+function offLines(st,id){
+  return offRows(st).filter(x=>x.diff&&x.row.entries
+    .some(e=>skuId(e.productId,e.pack)===id&&stDiff(e)))
+    .map(x=>x.row.batch||"—");
+}
+const shortPack=e=>({"Can":"ctn","10 Pack":"10pk","Keg":"50L","30L Keg":"30L"})[e.pack]||e.pack;
 function rowNeedsRecount(st,row){
-  return row.entries.some(e=>stDiff(e))||
-    row.entries.some(e=>skuMeta(st,skuId(e.productId,e.pack)).recount);
+  return row.entries.some(e=>stDiff(e))||!!lineMeta(st,row,row.entries[0]
+    ?row.entries[0].locationId:"coldroom").recount;
 }
 /* ---- lines that aren't settled ----
    A line disagreeing with the ERP, or flagged to be counted again. Re-count
@@ -3013,12 +3058,9 @@ function stDiff(e){
 }
 function needsRecount(e){ return !!e.recount||!!stDiff(e); }
 /* counted at SKU level: that is where the ERP reports and where the reason goes */
-function recountCount(st){
-  const t=skuTotals(st);
-  return t.filter(x=>x.diff||skuMeta(st,x.id).recount).length;
-}
+function recountCount(st){ return offRows(st).length; }
 function unexplained(st){
-  return skuTotals(st).filter(x=>x.diff&&!(skuMeta(st,x.id).note||"").trim()).length;
+  return offRows(st).filter(x=>x.diff&&!(x.meta.note||"").trim()).length;
 }
 /* ---- what this line held last time ----
    Matched on the batch where there is one, since that is the same physical
@@ -3973,47 +4015,111 @@ function editAdjust(s,preset){
     }
   },()=>{render();},"Done");
 }
-/* ---- one distributor, one column ----
-   They send one figure per beer on a Monday. Going SKU by SKU across the grid
-   to type six numbers is a waste of a morning: this is the same thing as a
-   list, with last week's figure beside it so an obvious typo stands out. */
-function enterSOH(locId){
-  const loc=L(locId)||{name:locId};
-  const cw=S.config.currentWeek, last=wkAdd(cw,-1);
-  openDialog("Stock on hand — "+loc.name,b=>{
-    b.append(el("div",{class:"note"},el("b",{},"What "+loc.name+" reports holding, w/c "+
-      fmtWY(cw)+". "),"Their drawdown is worked out from it. Enter moves down the list; "+
-      "leave a beer blank and its week stays as a forecast."));
-    const rows=skus().filter(s=>channelsFor(s.id).has(locId));
-    if(!rows.length){ b.append(el("div",{class:"empty"},"No beers are set to ship to "+loc.name+".")); return; }
-    const t=el("table",{class:"mini"});
-    t.append(el("thead",{},el("tr",{},el("th",{},"Beer"),el("th",{class:"num"},"Last week"),
-      el("th",{class:"num"},"This week"),el("th",{class:"num"},"Their drawdown"))));
-    const body=el("tbody");
-    for(const s of rows){
-      const k=histLoc(s.id,"soh",locId);
-      const prev=at(s.id,"soh",k,last);
-      const now=at(s.id,"soh",k,cw);
-      const drew=el("td",{class:"num dim"},nq(at(s.id,"used",histLoc(s.id,"used",locId),cw)));
-      const inp=el("input",{class:"cellinp num",type:"text",inputmode:"decimal",
-        value:now!=null?nq(now):"",placeholder:"—","data-sku":s.id,
+/* ============================ BY DISTRIBUTOR ============================
+   Monday morning with ALM's email open: every beer they take, on one page.
+   What they say they are holding, what that means they drew, and what is going
+   out to them this week — typed straight down the list. The figures are the
+   same ones the SKU grids hold; this is only a different way in. */
+let distLoc=null;
+function viewDistributor(pane,ctl){
+  const opts=S.locations.filter(l=>l.active!==false&&
+    (l.type==="distributor"||l.type==="retail"));
+  if(!opts.length){
+    pane.append(el("div",{class:"card"},el("div",{class:"empty"},
+      el("b",{},"No distributors set up"),"Add them under Setup.")));
+    return;
+  }
+  if(!distLoc||!opts.some(l=>l.id===distLoc)) distLoc=opts[0].id;
+  ctl.append(sel(opts.map(l=>[l.id,l.name]),distLoc,
+    {onchange:e=>{distLoc=e.target.value;render();}}));
+  const loc=L(distLoc);
+  const cw=S.config.currentWeek, lw=wkAdd(cw,-1);
+  ctl.append(el("span",{class:"hint"},"w/c "+fmtWY(cw)));
+  if(reportsOwn(distLoc)) ctl.append(el("span",{class:"chip warn"},"they report their own stock"));
+
+  const rows=skus().filter(s=>channelsFor(s.id).has(distLoc));
+  const t=el("div",{class:"tiles"});
+  const typed=rows.filter(s=>at(s.id,"soh",histLoc(s.id,"soh",distLoc),cw)!=null).length;
+  t.append(tile(loc.name,String(rows.length)+" SKUs",LOCTYPE[loc.type]||""));
+  t.append(tile("Reported this week",typed+" of "+rows.length,
+    typed===rows.length?"all in":"still to come",typed===rows.length?"ok":"warn"));
+  const outNow=sum(rows.map(s=>at(s.id,"out",histLoc(s.id,"out",distLoc),cw)||0));
+  t.append(tile("Going out this week",nq(outNow),"typed so far"));
+  const short=rows.filter(s=>{const c=compute(s.id).rows.find(r=>r.loc.id===distLoc);
+    return c&&c.soh&&c.soh[0]<0;}).length;
+  if(short) t.append(tile("Going negative",String(short),"on their shelf",'warn'));
+  pane.append(t);
+
+  pane.append(el("div",{class:"note"},el("b",{},"The same figures as the forecast. "),
+    "Anything typed here lands on that beer's grid, and anything typed there shows up here. ",
+    "Enter or the arrow keys walk down a column."));
+
+  const c=el("div",{class:"card"});
+  c.append(el("header",{},el("h3",{},loc.name),
+    el("span",{class:"chip acc"},"w/c "+fmtWY(cw)),
+    el("span",{style:"flex:1"}),
+    el("span",{class:"hint"},"Last week is still open for corrections")));
+  const w=el("div",{class:"scroll tall"}), tb=el("table",{class:"dist"});
+  tb.append(el("thead",{},el("tr",{},
+    el("th",{class:"stick"},"Beer"),
+    el("th",{class:"num",title:"What actually went out last week"},"Out "+fmtW(lw)),
+    el("th",{class:"num now",title:"What is going out this week"},"Out "+fmtW(cw)),
+    el("th",{class:"num",title:"What they reported holding last week"},"Their SOH "+fmtW(lw)),
+    el("th",{class:"num now",title:"What they report holding this week"},"Their SOH "+fmtW(cw)),
+    el("th",{class:"num",title:"What they must have sold this week"},"Drawdown"),
+    el("th",{class:"num",title:"Weeks of cover at their recent rate"},"Cover"),
+    el("th",{class:"num",title:"What the forecast says to send"},"Suggested"))));
+  const body=el("tbody");
+  for(const s of rows){
+    const cp=compute(s.id), r=cp.rows.find(x=>x.loc.id===distLoc);
+    const F=qfmt(s.id);
+    const cell=(field,wk,cls)=>{
+      const k=histLoc(s.id,field,distLoc);
+      const v=at(s.id,field,k,wk);
+      const inp=el("input",{class:"cellinp num","data-f":field+"|"+s.id+"|"+wk,
+        type:"text",inputmode:"decimal",value:v!=null?F(v):"",placeholder:"—",
         onfocus:ev=>ev.target.select(),
-        onkeydown:ev=>{if(ev.key!=="Enter"&&ev.key!=="ArrowDown"&&ev.key!=="ArrowUp")return;
-          ev.preventDefault();
-          const all=[...b.querySelectorAll("input[data-sku]")];
-          const i=all.indexOf(ev.target)+(ev.key==="ArrowUp"?-1:1);
-          if(all[i]){all[i].focus();all[i].select();}},
-        onchange:ev=>{setTheirSOH(s.id,locId,cw,ev.target.value);
-          drew.textContent=nq(at(s.id,"used",histLoc(s.id,"used",locId),cw));
-          S.calcCache=null;}});
-      body.append(el("tr",{},
-        el("td",{},swatch(s.product.id),s.product.name+" "+s.pack),
-        el("td",{class:"num dim"},prev==null?"—":nq(prev)),
-        el("td",{class:"cell"},inp),
-        drew));
-    }
-    t.append(body); b.append(t);
-  },()=>{S.calcCache=null;render();},"Done");
+        onkeydown:ev=>distStep(ev),
+        onchange:ev=>{
+          if(field==="soh") setTheirSOH(s.id,distLoc,wk,ev.target.value);
+          else setActual(s.id,distLoc,wk,ev.target.value);
+          reflow();
+        }});
+      return el("td",{class:"cell"+(cls||"")},inp);
+    };
+    /* what they drew this week: the real figure once their stock on hand is in,
+       the forecast until then — shown greyed so the two are never confused */
+    const real=at(s.id,"used",histLoc(s.id,"used",distLoc),cw);
+    const drew=real!=null?real:(r&&r.draw?r.draw[0]:null);
+    const rate=r?(r.avg||(r.draw?sum(r.draw.slice(0,4))/4:0)):0;
+    const cover=(r&&rate>0)?Math.round((r.opening/rate)*10)/10:null;
+    body.append(el("tr",{class:"stripe"},
+      el("td",{class:"stick"},swatch(s.product.id),s.product.name+" ",
+        el("span",{class:"dim"},s.pack)),
+      cell("out",lw),
+      cell("out",cw," now"),
+      cell("soh",lw),
+      cell("soh",cw," now"),
+      el("td",{class:"num"+(real!=null?"":" dim plan"),
+        title:real!=null?"Worked out from what they reported":"Forecast — no figure from them yet"},
+        drew==null?"—":F(drew)),
+      el("td",{class:"num"+(cover!=null&&cover<2?" neg":"")},cover==null?"—":nq(cover)),
+      el("td",{class:"num dim",title:"What the plan would send this week"},
+        r&&r.ship?F(r.ship[0]):"—")));
+  }
+  tb.append(body); w.append(tb); c.append(w); pane.append(c);
+}
+/* Enter and the arrows walk down the same column, like the count sheet */
+function distStep(ev){
+  const k=ev.key;
+  if(k!=="Enter"&&k!=="ArrowDown"&&k!=="ArrowUp") return;
+  ev.preventDefault();
+  const td=ev.target.closest("td"), tr=td&&td.closest("tr");
+  if(!tr) return;
+  const i=[...tr.children].indexOf(td);
+  const next=(k==="ArrowUp")?tr.previousElementSibling:tr.nextElementSibling;
+  const to=next&&next.children[i]&&next.children[i].querySelector("input");
+  if(to){ to.focus(); to.select(); }
 }
 /* ---- returns ----
    Everything recorded about stock that came back from one channel, with the
