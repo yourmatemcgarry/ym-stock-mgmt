@@ -109,6 +109,21 @@ table.mini td.num,table.mini th.num{text-align:right;font-family:var(--mono)}
 .fg td.inp.nowcol input{background:transparent}
 .fg td.inp.nowcol.edited input{background:var(--accent-soft)}
 .fg td.adj{color:var(--accent-ink);font-weight:600}
+/* the forecast as one long sheet: the dates stay at the top, the names at the
+   left, and the whole thing scrolls inside the window rather than the page */
+.sheet{overflow:auto;max-height:calc(100vh - 230px);border:1px solid var(--line);
+  border-radius:var(--r);background:var(--surface);box-shadow:var(--shadow)}
+.fg.big thead th{position:sticky;top:0;z-index:7}
+.fg.big thead th.stick{z-index:9}
+.fg.big tr.band td{background:var(--surface-2);border-top:2px solid var(--line);
+  border-bottom:1px solid var(--line);padding:0}
+.fg.big tr.band .bandstick,.fg.big tr.runsout .bandstick{position:sticky;left:0;
+  width:max-content;max-width:calc(100vw - 280px);padding:7px 10px}
+.fg.big .bandinner{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.fg.big .bandinner h3{font:600 13.5px/1.2 var(--disp);margin:0}
+.fg.big .bandinner h3 span{color:var(--muted);font-weight:500;margin-left:5px;font-size:12px}
+.fg.big tr.runsout td{background:var(--warn-soft);color:var(--warn);font-size:11.5px;padding:0}
+.fg.big tr.band td:first-child,.fg.big tr.runsout td:first-child{min-width:0;max-width:none}
 /* the batch sheet */
 table.bsheet th.grp{text-align:center;background:var(--sunk);border-left:2px solid var(--line);
   font-size:10px;letter-spacing:.1em}
@@ -123,14 +138,7 @@ table.bsheet thead th.stick,table.bsheet thead th.stick2{z-index:8;background:va
 table.bsheet input.batch{width:118px;font-size:11.5px;letter-spacing:0}
 table.bsheet td.cell input.num{width:52px}
 table.bsheet tbody tr:hover td{background:var(--surface-2)}
-table.dist th.stick,table.dist td.stick{position:sticky;left:0;z-index:4;
-  background:var(--surface);min-width:190px}
-table.dist thead th.stick{z-index:8;background:var(--surface-2)}
-table.dist th.now{background:var(--accent-soft);color:var(--accent-ink)}
-table.dist td.now{background:var(--accent-soft)}
-table.dist td.cell{padding-right:6px}
-table.dist td.cell input{width:100%;min-width:70px}
-table.dist tbody tr:hover td{background:var(--surface-2)}
+
 /* a figure that is still the plan, not an actual */
 .fg td.plan{color:var(--muted);font-style:italic}
 .fg td.inp.plan input::placeholder{color:var(--muted);opacity:1;font-style:italic}
@@ -427,7 +435,7 @@ dialog footer{padding:12px 16px;border-top:1px solid var(--line-soft);display:fl
 /* Which build this is. It shows at the bottom of the sidebar and on Setup, so
    there is never any doubt about whether a deploy actually landed: if the
    stamp hasn't changed after deploying, the browser is still on the old file. */
-const BUILD="2026-11-02b · a page per distributor, reasons on the batch line";
+const BUILD="2026-11-02c · one long forecast sheet, one frozen date row";
 /* ============================ helpers ============================ */
 const $ = (s,r)=> (r||document).querySelector(s);
 const el = (t,a,...k)=>{const n=document.createElement(t);
@@ -1573,7 +1581,7 @@ function alerts(){
 <script>
 "use strict";
 /* ============================ nav / router ============================ */
-const ICONS={dist:'<path d="M3 7h18M3 12h18M3 17h18" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/>',
+const ICONS={
  forecast:'<path d="M3 3v18h18"/><path d="M7 14l4-5 3 3 5-7"/>',
  stocktake:'<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M9 8h6M9 12h6M9 16h3"/>',
  production:'<path d="M4 20V9l5 3V9l5 3V4l6 3v13z"/>',
@@ -1584,8 +1592,6 @@ const ICONS={dist:'<path d="M3 7h18M3 12h18M3 17h18" stroke="currentColor" strok
 const VIEWS=[
  {id:"forecast",label:"Forecast",title:"Forecast",sub:"Monday afternoon: what's going out this week, and the weeks after it"},
  {id:"noncore",label:"Non-core",title:"Non-core range",sub:"Seasonals, one-offs and anything that isn't part of the core range"},
- {id:"dist",label:"Distributors",title:"By distributor",
-  sub:"One distributor at a time: what they hold, what they drew, what goes out"},
  {id:"stocktake",label:"Stocktake",title:"Weekly stocktake",sub:"Batch-level counts by location — the numbers everything else runs on"},
  {id:"production",label:"Production",title:"Production schedule",sub:"Planned packaging runs and the brew dates they imply"},
  {id:"ageing",label:"Aged stock",title:"Aged stock",sub:"Best before, send-by cut-offs and what needs moving"},
@@ -1643,7 +1649,8 @@ function uiState(){
     st.path=uiPath(a);
     if(a.selectionStart!=null) st.sel=[a.selectionStart,a.selectionEnd];
   }
-  for(const d of document.querySelectorAll("#pane .scroll")) st.box.push([d.scrollLeft,d.scrollTop]);
+  for(const d of document.querySelectorAll("#pane .scroll, #pane .sheet"))
+    st.box.push([d.scrollLeft,d.scrollTop]);
   return st;
 }
 function uiRestore(st){
@@ -1651,7 +1658,7 @@ function uiRestore(st){
   /* the boxes are put back twice: once now, and once the browser has settled
      the table's width, which it may not have done at the first attempt */
   const seq=++_uiSeq;
-  const boxes=()=>document.querySelectorAll("#pane .scroll");
+  const boxes=()=>document.querySelectorAll("#pane .scroll, #pane .sheet");
   const scrolls=()=>{
     const bs=boxes();
     for(let i=0;i<bs.length;i++){
@@ -1668,9 +1675,8 @@ function uiRestore(st){
     try{ n.focus({preventScroll:true}); }catch(e){ n.focus(); }
   }
   if(n&&st.sel&&n.setSelectionRange){ try{ n.setSelectionRange(st.sel[0],st.sel[1]); }catch(e){} }
-  syncNew();
   window.scrollTo(0,st.y);
-  requestAnimationFrame(()=>{ if(seq!==_uiSeq) return; scrolls(); syncNew(); window.scrollTo(0,st.y); });
+  requestAnimationFrame(()=>{ if(seq!==_uiSeq) return; scrolls(); window.scrollTo(0,st.y); });
 }
 /* A cell's change event fires while the focus is still moving to the next one,
    so the redraw waits a tick — by then the new cell is focused and can be
@@ -1700,7 +1706,6 @@ function render(){
   try{
     ({forecast:viewForecast,noncore:viewForecast,stocktake:viewStocktake,
       production:viewProduction,ageing:viewAgeing,review:viewReview,
-      dist:viewDistributor,
       setup:viewSetup}[S.view])(pane,ctl,v);
   }catch(e){
     console.error(e);
@@ -1798,14 +1803,15 @@ function viewForecast(pane,ctl){
   if(which==="noncore") ctl.append(el("button",{class:"btn",
     title:"Choose which beers sit in the non-core range",
     onclick:editRange},"Choose the range"));
+  /* one distributor at a time: every beer, but only that channel's rows */
+  {const chans=S.locations.filter(l=>l.active!==false&&l.type!=="internal");
+   ctl.append(sel([["","Every channel"],...chans.map(l=>[l.id,l.name+" only"])],fcLoc,
+     {title:"Show only this channel's rows, for every beer",
+      onchange:e=>{fcLoc=e.target.value;render();}}));}
   ctl.append(el("span",{class:"hint"},"Horizon"));
   ctl.append(sel([[13,"13 weeks"],[26,"26 weeks"],[52,"52 weeks"]],S.config.horizon,
     {onchange:e=>{S.config.horizon=+e.target.value;S.calcCache=null;saveConfig();render();}}));
   packFilterCtl(ctl,"packTab");
-  ctl.append(el("button",{class:"btn",onclick:()=>{
-    const open=Object.values(S.open).some(Boolean);
-    S.open={}; if(!open) for(const s of visibleSkus()) S.open[s.id]=true; render();
-  }},"Expand / collapse"));
 
   const crit=a.filter(x=>x.sev==="crit"), warn=a.filter(x=>x.sev==="warn");
   const t=el("div",{class:"tiles"});
@@ -1834,7 +1840,25 @@ function viewForecast(pane,ctl){
       ?el("div",{},"Put the seasonals and one-offs here and they come off the main forecast. ",
          el("button",{class:"btn pri",style:"margin-top:10px",onclick:editRange},"Choose the range"))
       :"Add products and packs in Setup, then enter a stocktake.")));
-  for(const s of vis){ const c=all[s.id]||compute(s.id); pane.append(skuGrid(s,c)); }
+  if(!vis.length) return;
+  /* One table for the lot. The date row is pinned to the top of the sheet and
+     the names to its left, so however far down or across you are, you can read
+     what a number is. */
+  const first=all[vis[0].id]||compute(vis[0].id);
+  const axis=[...first.past,...first.weeks], cwIdx=first.past.length-1;
+  const wrap=el("div",{class:"sheet"});
+  const tbl=el("table",{class:"fg big"});
+  const hr=el("tr",{});
+  hr.append(el("th",{class:"stick"},"Week commencing"));
+  axis.forEach((w,i)=>{const th=el("th",{class:"wkh"+(i===cwIdx?" now nowcol":"")},
+    el("b",{},fmtW(w)),String(D(w).getUTCFullYear()).slice(2));th.title=w;hr.append(th);});
+  tbl.append(el("thead",{},hr));
+  for(const s of vis){
+    const c=all[s.id]||compute(s.id);
+    if(fcLoc&&!c.rows.some(r=>r.loc.id===fcLoc)) continue;   /* doesn't go there */
+    skuGrid(s,c,tbl,axis,cwIdx,fcLoc||null);
+  }
+  wrap.append(tbl); pane.append(wrap);
 }
 /* ---- core and non-core ----
    The core range is the beer that is always on; everything else — seasonals,
@@ -1846,39 +1870,27 @@ function rangeOfView(){ return S.view==="noncore"?"noncore":"core"; }
 function skusInRange(which){
   return skus().filter(s=>isNonCore(s.product)===(which==="noncore"));
 }
-/* Every SKU's grid shares one week axis, so they share one sideways position:
-   scroll any of them and the rest follow, and the same column is the same week
-   all the way down the page. */
-let syncing=false, syncLeft=0;
-function syncAcross(from){
-  if(syncing) return;
-  syncing=true;
-  syncLeft=from.scrollLeft;
-  for(const d of document.querySelectorAll("#pane .scroll.wklock"))
-    if(d!==from&&d.scrollLeft!==syncLeft) d.scrollLeft=syncLeft;
-  requestAnimationFrame(()=>{syncing=false;});
-}
-/* a grid drawn after the others starts where they are */
-function syncNew(){
-  if(!syncLeft) return;
-  for(const d of document.querySelectorAll("#pane .scroll.wklock"))
-    if(d.scrollLeft!==syncLeft) d.scrollLeft=syncLeft;
-}
+/* every beer is in the one table now, so there is one sideways position and
+   nothing to keep in step */
+let fcLoc="";
 function visibleSkus(){
   const which=rangeOfView();
   return skusInRange(which)
     .filter(s=>S.packTab==="all"||s.pack===S.packTab)
     /* a stock-only beer is hidden from the main forecast, but showing it is the
        whole point of the non-core screen */
-    .filter(s=>which==="noncore"||s.product.forecast!==false||S.open[s.id]);
+    .filter(s=>which==="noncore"||s.product.forecast!==false);
 }
 
-function skuGrid(s,c){
+/* One beer's block of the big table: a band with its name and its buttons,
+   then its channels and its coldroom. Everything is drawn — there is no
+   opening and closing any more — and `only` keeps it to one distributor. */
+function skuGrid(s,c,parent,axis,cwIdx,only){
+  const tb=el("tbody",{id:"sku-"+s.id,class:"skublock"});
+  parent.append(tb);
   const F=qfmt(s.id);
-  const wrap=el("div",{class:"gridwrap",id:"sku-"+s.id,"data-open":String(!!S.open[s.id])});
   const sev=c.stockoutWeek?(wkDiff(S.config.currentWeek,c.stockoutWeek)<=4?"crit":"warn"):"ok";
-  const head=el("header",{onclick:()=>{S.open[s.id]=!S.open[s.id];render();}},
-    el("span",{html:'<svg class="caret" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>'}).firstChild,
+  const head=el("div",{class:"bandinner"},
     swatch(s.id),
     el("h3",{},s.product.name,el("span",{},s.pack)),
     el("span",{class:"chip "+(sev==="crit"?"crit":sev==="warn"?"warn":"ok")},
@@ -1933,32 +1945,20 @@ function skuGrid(s,c){
         title:"Forecast this SKU from another one's history — for a beer with no history of its own",
         onclick:ev=>{ev.stopPropagation();editModel(s);}},
         m&&m.sku?("like "+skuLabel(m.sku)+(m.pct!=null&&m.pct!==100?" "+m.pct+"%":"")):"Model on…");})());
-  wrap.append(head);
-  if(!S.open[s.id]) return wrap;
+  /* the band spans the whole table, but its contents stay pinned to the left
+     edge so the buttons are there however far across the weeks you have gone */
+  const band=el("tr",{class:"band"});
+  band.append(el("td",{colspan:axis.length+1},el("div",{class:"bandstick"},head)));
+  tb.append(band);
 
   if(!c.rows.length){
-    wrap.append(el("div",{class:"empty"},
-      el("b",{},"No channels chosen for "+s.product.name+" "+s.pack),
-      el("div",{},"Pick the distributors and channels it goes to and the forecast fills in."),
-      el("button",{class:"btn pri",style:"margin-top:12px",onclick:()=>editChannels(s)},
-        "Choose channels")));
-    return wrap;
+    const tr=el("tr",{});
+    tr.append(el("td",{colspan:axis.length+1},el("div",{class:"bandstick"},
+      el("span",{class:"hint"},"No channels chosen — "),
+      el("button",{class:"btn sm",onclick:()=>editChannels(s)},"Choose channels"))));
+    tb.append(tr);
+    return;
   }
-  const axis=[...c.past,...c.weeks], cwIdx=c.past.length-1;
-  /* "tall" bounds the height so the week row has something to stick to: a
-     short SKU is unaffected, a long one scrolls inside its own card with its
-     dates and channel names staying put. "sync" keeps every SKU on the same
-     week, so scrolling one grid sideways moves them all and a column means
-     the same thing whichever beer you are looking at. ("sync" is taken by the
-     save indicator in the sidebar, hence the name.) */
-  const scroll=el("div",{class:"scroll tall wklock"}), t=el("table",{class:"fg"});
-  scroll.addEventListener("scroll",()=>syncAcross(scroll));
-  const thead=el("thead"), hr=el("tr",{});
-  hr.append(el("th",{class:"stick"},"Week commencing"));
-  axis.forEach((w,i)=>{const th=el("th",{class:"wkh"+(i===cwIdx?" now nowcol":"")},
-    el("b",{},fmtW(w)),String(D(w).getUTCFullYear()).slice(2));th.title=w;hr.append(th);});
-  thead.append(hr); t.append(thead);
-  const tb=el("tbody");
   const NP=c.past.length;
 
   const vcell=(v,i,cls)=>{const td=el("td",{class:"v "+(i<NP?"past ":"")
@@ -1966,6 +1966,7 @@ function skuGrid(s,c){
     td.textContent=v==null?"·":F(v);return td;};
 
   for(const r of c.rows){
+    if(only&&r.loc.id!==only) continue;
     tb.append(el("tr",{class:"sep"},el("td",{colspan:axis.length+1})));
     const tag=r.loc.type==="distributor"?"dist":r.loc.type==="retail"?"retail":"direct";
     const tagcls=r.loc.type==="direct"?"":"d";
@@ -2040,6 +2041,7 @@ function skuGrid(s,c){
     }
   }
   // ---- coldroom block ----
+  if(only) return;              /* looking at one channel, not the whole beer */
   tb.append(el("tr",{class:"sep"},el("td",{colspan:axis.length+1})));
 
   /* read down the column: what was there Monday, what gets packaged, what goes
@@ -2144,14 +2146,16 @@ function skuGrid(s,c){
     v!=null&&v<0?"neg":v!=null&&v<S.config.coverWarnWeeks?"low":"")));
   tb.append(trD);
 
-  t.append(tb); scroll.append(t); wrap.append(scroll);
   if(c.stockoutWeek){
-    wrap.append(el("div",{class:"note",style:"margin:0;border:0;border-top:1px solid var(--line-soft);border-radius:0"},
-      el("b",{},s.product.name+" "+s.pack+" runs out of coldroom stock in the week of "+fmtD(c.stockoutWeek)+". "),
-      "At "+((P(s.product.id)||{}).brewToPackDays||21)+" days from brew to pack, brew by "+fmtD(c.brewBy)+". ",
-      el("button",{class:"btn sm",style:"margin-left:6px",onclick:()=>newRun(s.id,c.brewBy)},"Schedule a run")));
+    const tr=el("tr",{class:"runsout"});
+    tr.append(el("td",{colspan:axis.length+1},el("div",{class:"bandstick"},
+      el("b",{},s.product.name+" "+s.pack+" runs out in the week of "+fmtD(c.stockoutWeek)+". "),
+      "At "+((P(s.product.id)||{}).brewToPackDays||21)+" days from brew to pack, brew by "+
+      fmtD(c.brewBy)+". ",
+      el("button",{class:"btn sm",style:"margin-left:8px",
+        onclick:()=>newRun(s.id,c.brewBy)},"Schedule a run"))));
+    tb.append(tr);
   }
-  return wrap;
 }
 /* "same as last year, but…" — a percentage against the prior-year basis.
    100 is no change, 150 is half as much again, 50 is half. It only shows on a
@@ -4014,112 +4018,6 @@ function editAdjust(s,preset){
       t.append(body); b.append(t);
     }
   },()=>{render();},"Done");
-}
-/* ============================ BY DISTRIBUTOR ============================
-   Monday morning with ALM's email open: every beer they take, on one page.
-   What they say they are holding, what that means they drew, and what is going
-   out to them this week — typed straight down the list. The figures are the
-   same ones the SKU grids hold; this is only a different way in. */
-let distLoc=null;
-function viewDistributor(pane,ctl){
-  const opts=S.locations.filter(l=>l.active!==false&&
-    (l.type==="distributor"||l.type==="retail"));
-  if(!opts.length){
-    pane.append(el("div",{class:"card"},el("div",{class:"empty"},
-      el("b",{},"No distributors set up"),"Add them under Setup.")));
-    return;
-  }
-  if(!distLoc||!opts.some(l=>l.id===distLoc)) distLoc=opts[0].id;
-  ctl.append(sel(opts.map(l=>[l.id,l.name]),distLoc,
-    {onchange:e=>{distLoc=e.target.value;render();}}));
-  const loc=L(distLoc);
-  const cw=S.config.currentWeek, lw=wkAdd(cw,-1);
-  ctl.append(el("span",{class:"hint"},"w/c "+fmtWY(cw)));
-  if(reportsOwn(distLoc)) ctl.append(el("span",{class:"chip warn"},"they report their own stock"));
-
-  const rows=skus().filter(s=>channelsFor(s.id).has(distLoc));
-  const t=el("div",{class:"tiles"});
-  const typed=rows.filter(s=>at(s.id,"soh",histLoc(s.id,"soh",distLoc),cw)!=null).length;
-  t.append(tile(loc.name,String(rows.length)+" SKUs",LOCTYPE[loc.type]||""));
-  t.append(tile("Reported this week",typed+" of "+rows.length,
-    typed===rows.length?"all in":"still to come",typed===rows.length?"ok":"warn"));
-  const outNow=sum(rows.map(s=>at(s.id,"out",histLoc(s.id,"out",distLoc),cw)||0));
-  t.append(tile("Going out this week",nq(outNow),"typed so far"));
-  const short=rows.filter(s=>{const c=compute(s.id).rows.find(r=>r.loc.id===distLoc);
-    return c&&c.soh&&c.soh[0]<0;}).length;
-  if(short) t.append(tile("Going negative",String(short),"on their shelf",'warn'));
-  pane.append(t);
-
-  pane.append(el("div",{class:"note"},el("b",{},"The same figures as the forecast. "),
-    "Anything typed here lands on that beer's grid, and anything typed there shows up here. ",
-    "Enter or the arrow keys walk down a column."));
-
-  const c=el("div",{class:"card"});
-  c.append(el("header",{},el("h3",{},loc.name),
-    el("span",{class:"chip acc"},"w/c "+fmtWY(cw)),
-    el("span",{style:"flex:1"}),
-    el("span",{class:"hint"},"Last week is still open for corrections")));
-  const w=el("div",{class:"scroll tall"}), tb=el("table",{class:"dist"});
-  tb.append(el("thead",{},el("tr",{},
-    el("th",{class:"stick"},"Beer"),
-    el("th",{class:"num",title:"What actually went out last week"},"Out "+fmtW(lw)),
-    el("th",{class:"num now",title:"What is going out this week"},"Out "+fmtW(cw)),
-    el("th",{class:"num",title:"What they reported holding last week"},"Their SOH "+fmtW(lw)),
-    el("th",{class:"num now",title:"What they report holding this week"},"Their SOH "+fmtW(cw)),
-    el("th",{class:"num",title:"What they must have sold this week"},"Drawdown"),
-    el("th",{class:"num",title:"Weeks of cover at their recent rate"},"Cover"),
-    el("th",{class:"num",title:"What the forecast says to send"},"Suggested"))));
-  const body=el("tbody");
-  for(const s of rows){
-    const cp=compute(s.id), r=cp.rows.find(x=>x.loc.id===distLoc);
-    const F=qfmt(s.id);
-    const cell=(field,wk,cls)=>{
-      const k=histLoc(s.id,field,distLoc);
-      const v=at(s.id,field,k,wk);
-      const inp=el("input",{class:"cellinp num","data-f":field+"|"+s.id+"|"+wk,
-        type:"text",inputmode:"decimal",value:v!=null?F(v):"",placeholder:"—",
-        onfocus:ev=>ev.target.select(),
-        onkeydown:ev=>distStep(ev),
-        onchange:ev=>{
-          if(field==="soh") setTheirSOH(s.id,distLoc,wk,ev.target.value);
-          else setActual(s.id,distLoc,wk,ev.target.value);
-          reflow();
-        }});
-      return el("td",{class:"cell"+(cls||"")},inp);
-    };
-    /* what they drew this week: the real figure once their stock on hand is in,
-       the forecast until then — shown greyed so the two are never confused */
-    const real=at(s.id,"used",histLoc(s.id,"used",distLoc),cw);
-    const drew=real!=null?real:(r&&r.draw?r.draw[0]:null);
-    const rate=r?(r.avg||(r.draw?sum(r.draw.slice(0,4))/4:0)):0;
-    const cover=(r&&rate>0)?Math.round((r.opening/rate)*10)/10:null;
-    body.append(el("tr",{class:"stripe"},
-      el("td",{class:"stick"},swatch(s.product.id),s.product.name+" ",
-        el("span",{class:"dim"},s.pack)),
-      cell("out",lw),
-      cell("out",cw," now"),
-      cell("soh",lw),
-      cell("soh",cw," now"),
-      el("td",{class:"num"+(real!=null?"":" dim plan"),
-        title:real!=null?"Worked out from what they reported":"Forecast — no figure from them yet"},
-        drew==null?"—":F(drew)),
-      el("td",{class:"num"+(cover!=null&&cover<2?" neg":"")},cover==null?"—":nq(cover)),
-      el("td",{class:"num dim",title:"What the plan would send this week"},
-        r&&r.ship?F(r.ship[0]):"—")));
-  }
-  tb.append(body); w.append(tb); c.append(w); pane.append(c);
-}
-/* Enter and the arrows walk down the same column, like the count sheet */
-function distStep(ev){
-  const k=ev.key;
-  if(k!=="Enter"&&k!=="ArrowDown"&&k!=="ArrowUp") return;
-  ev.preventDefault();
-  const td=ev.target.closest("td"), tr=td&&td.closest("tr");
-  if(!tr) return;
-  const i=[...tr.children].indexOf(td);
-  const next=(k==="ArrowUp")?tr.previousElementSibling:tr.nextElementSibling;
-  const to=next&&next.children[i]&&next.children[i].querySelector("input");
-  if(to){ to.focus(); to.select(); }
 }
 /* ---- returns ----
    Everything recorded about stock that came back from one channel, with the
