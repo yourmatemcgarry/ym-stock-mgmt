@@ -459,7 +459,7 @@ dialog footer{padding:12px 16px;border-top:1px solid var(--line-soft);display:fl
 /* Which build this is. It shows at the bottom of the sidebar and on Setup, so
    there is never any doubt about whether a deploy actually landed: if the
    stamp hasn't changed after deploying, the browser is still on the old file. */
-const BUILD="2026-11-08 · the year by month, by brand, against last year";
+const BUILD="2026-11-09 · 30L keg counts save again";
 /* ============================ helpers ============================ */
 const $ = (s,r)=> (r||document).querySelector(s);
 const el = (t,a,...k)=>{const n=document.createElement(t);
@@ -645,6 +645,7 @@ async function loadAll(){
   if(ru&&ru.length) S.runs=ru;
   /* anything still queued on this device is newer than what came back */
   applyOutbox();
+  mendKegLines();
   S.products.sort((a,b2)=>(a.sort|0)-(b2.sort|0));
   S.locations.sort((a,b2)=>(a.sort|0)-(b2.sort|0));
   S.stock.sort((a,b2)=>a.weekStart<b2.weekStart?1:-1);
@@ -3001,6 +3002,45 @@ function cellEntry(st,locId,row,pc,make){
   st.entries=st.entries||[]; st.entries.push(e); row.entries.push(e);
   return e;
 }
+/* ---- one-off repair ----
+   Until 9 Nov 2026 the 30L keg columns were not recognised as having a fleet, so
+   every time somebody typed into one the sheet made a fresh line instead of
+   finding the one already there. The counts were saved, just scattered over
+   several invisible lines. This folds them back into one line per cell. */
+function mendKegLines(){
+  let mended=0;
+  for(const st of (S.stock||[])){
+    const seen=new Map(); const drop=new Set(); let hit=false;
+    for(const e of (st.entries||[])){
+      if(e.pack!=="30L Keg") continue;
+      const k=[e.locationId,e.productId,e.batch||"",e.fleet||"Konvoy"].join("|");
+      const first=seen.get(k);
+      if(!first){ seen.set(k,e); continue; }
+      hit=true; drop.add(e);
+      /* the later line wins each shed it has a figure for */
+      if(e.counts){ first.counts=first.counts||{};
+        for(const a of COUNT_AREAS) if(e.counts[a]!=null) first.counts[a]=e.counts[a]; }
+      else if(e.qty!=null&&!first.counts) first.qty=e.qty;
+      if(e.erp!=null) first.erp=e.erp;
+      if(e.note) first.note=e.note;
+      if(e.recheck) first.recheck=true;
+      if(!first.bestBefore&&e.bestBefore) first.bestBefore=e.bestBefore;
+      if(!first.fleet) first.fleet=e.fleet||"Konvoy";
+    }
+    for(const e of seen.values()){
+      if(!e.counts) continue;
+      const vals=COUNT_AREAS.map(a=>e.counts[a]).filter(x=>x!=null);
+      if(vals.length) e.qty=Math.round(sum(vals)*100)/100;
+      else { delete e.qty; delete e.counts; }
+    }
+    if(!hit) continue;
+    st.entries=st.entries.filter(e=>!drop.has(e));
+    mended+=drop.size;
+    persist("stocktakes",st);
+  }
+  if(mended){ S.calcCache=null; console.log("mended "+mended+" stray 30L keg lines"); }
+  return mended;
+}
 function addBatchRow(st,locId){
   openDialog("Add a batch",b=>{
     const prods=S.products.slice().sort((a,b2)=>a.name.localeCompare(b2.name));
@@ -3119,9 +3159,11 @@ function lastWeekQty(st,e){
    which is what the ERP is compared against. A line counted before this existed
    keeps its single figure until somebody types into one of the sheds. */
 const COUNT_AREAS=["41 Tech","43 Tech"];
-/* 50L kegs belong to one pool or the other; everything else has no fleet */
+/* kegs, 50L and 30L alike, belong to one pool or the other; nothing else has a fleet.
+   This has to agree with PACKCOLS: a pack with a column per fleet must be in here,
+   or colKey() can never match the column it was typed into and the count is lost. */
 const KEG_FLEETS=["Konvoy","Your Mates"];
-const hasFleet=pack=>pack==="Keg";
+const hasFleet=pack=>pack==="Keg"||pack==="30L Keg";
 function areaQty(e,a){ return e.counts?e.counts[a]:undefined; }
 function setAreaQty(st,e,a,val){
   const v=num(val);
