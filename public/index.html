@@ -124,6 +124,30 @@ table.mini td.num,table.mini th.num{text-align:right;font-family:var(--mono)}
 .fg.big .bandinner h3 span{color:var(--muted);font-weight:500;margin-left:5px;font-size:12px}
 .fg.big tr.runsout td{background:var(--warn-soft);color:var(--warn);font-size:11.5px;padding:0}
 .fg.big tr.band td:first-child,.fg.big tr.runsout td:first-child{min-width:0;max-width:none}
+/* the year by month */
+table.months th.mth{min-width:74px}
+table.months th.mth.done{color:var(--muted)}
+table.months th.mth .partmark{display:block;font:600 8px/1.4 var(--sans);letter-spacing:.08em;
+  text-transform:uppercase;color:var(--warn);background:var(--warn-soft);border-radius:3px;
+  margin-top:2px;padding:0 3px}
+table.months th.tot,table.months td.tot{background:var(--surface-2);border-left:2px solid var(--line);
+  position:sticky;right:0;z-index:5}
+table.months thead th.tot{z-index:9}
+table.months tr.totalrow td.tot{background:var(--sunk)}
+table.months td.mcell{padding:4px 8px;vertical-align:top}
+table.months td.mcell .v{font:600 12.5px/1.25 var(--mono);color:var(--ink)}
+table.months td.mcell .cmp{font:500 9.5px/1.3 var(--sans);color:var(--muted);white-space:nowrap}
+table.months td.mcell .cmp.up{color:var(--ok)}
+table.months td.mcell .cmp.down{color:var(--crit)}
+table.months td.fcast .v{color:var(--ink-2);font-style:italic}
+table.months tr.brandrow td{background:var(--surface);border-top:1px solid var(--line)}
+table.months tr.brandrow td.stick b{font-size:13px}
+table.months tr.skurow td{background:var(--surface-2)}
+table.months tr.skurow td.mcell .v{font-weight:500;color:var(--ink-2)}
+table.months tr.totalrow td{background:var(--sunk);border-top:2px solid var(--line)}
+table.months tr.totalrow td.mcell .v{font-weight:700}
+table.months .caret{transition:transform .12s ease}
+table.months .caret.open{transform:rotate(90deg)}
 /* the batch sheet */
 table.bsheet th.grp{text-align:center;background:var(--sunk);border-left:2px solid var(--line);
   font-size:10px;letter-spacing:.1em}
@@ -435,7 +459,7 @@ dialog footer{padding:12px 16px;border-top:1px solid var(--line-soft);display:fl
 /* Which build this is. It shows at the bottom of the sidebar and on Setup, so
    there is never any doubt about whether a deploy actually landed: if the
    stamp hasn't changed after deploying, the browser is still on the old file. */
-const BUILD="2026-11-02c · one long forecast sheet, one frozen date row";
+const BUILD="2026-11-09 · 30L keg counts save again";
 /* ============================ helpers ============================ */
 const $ = (s,r)=> (r||document).querySelector(s);
 const el = (t,a,...k)=>{const n=document.createElement(t);
@@ -621,6 +645,7 @@ async function loadAll(){
   if(ru&&ru.length) S.runs=ru;
   /* anything still queued on this device is newer than what came back */
   applyOutbox();
+  mendKegLines();
   S.products.sort((a,b2)=>(a.sort|0)-(b2.sort|0));
   S.locations.sort((a,b2)=>(a.sort|0)-(b2.sort|0));
   S.stock.sort((a,b2)=>a.weekStart<b2.weekStart?1:-1);
@@ -1581,7 +1606,7 @@ function alerts(){
 <script>
 "use strict";
 /* ============================ nav / router ============================ */
-const ICONS={
+const ICONS={months:'<path d="M4 5h16v15H4zM4 10h16M9 5v15M15 5v15" stroke="currentColor" stroke-width="1.8" fill="none"/>',
  forecast:'<path d="M3 3v18h18"/><path d="M7 14l4-5 3 3 5-7"/>',
  stocktake:'<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M9 8h6M9 12h6M9 16h3"/>',
  production:'<path d="M4 20V9l5 3V9l5 3V4l6 3v13z"/>',
@@ -1595,6 +1620,8 @@ const VIEWS=[
  {id:"stocktake",label:"Stocktake",title:"Weekly stocktake",sub:"Batch-level counts by location — the numbers everything else runs on"},
  {id:"production",label:"Production",title:"Production schedule",sub:"Planned packaging runs and the brew dates they imply"},
  {id:"ageing",label:"Aged stock",title:"Aged stock",sub:"Best before, send-by cut-offs and what needs moving"},
+ {id:"months",label:"By month",title:"The year by month",
+  sub:"Volume out, month by month and brand by brand, against last year"},
  {id:"review",label:"Review",title:"Review",sub:"This year against the last two, and how well each forecast basis has held up"},
  {id:"setup",label:"Setup",title:"Setup",sub:"Products, packs, distributors and customer channels"}];
 
@@ -1706,6 +1733,7 @@ function render(){
   try{
     ({forecast:viewForecast,noncore:viewForecast,stocktake:viewStocktake,
       production:viewProduction,ageing:viewAgeing,review:viewReview,
+      months:viewMonths,
       setup:viewSetup}[S.view])(pane,ctl,v);
   }catch(e){
     console.error(e);
@@ -2974,6 +3002,45 @@ function cellEntry(st,locId,row,pc,make){
   st.entries=st.entries||[]; st.entries.push(e); row.entries.push(e);
   return e;
 }
+/* ---- one-off repair ----
+   Until 9 Nov 2026 the 30L keg columns were not recognised as having a fleet, so
+   every time somebody typed into one the sheet made a fresh line instead of
+   finding the one already there. The counts were saved, just scattered over
+   several invisible lines. This folds them back into one line per cell. */
+function mendKegLines(){
+  let mended=0;
+  for(const st of (S.stock||[])){
+    const seen=new Map(); const drop=new Set(); let hit=false;
+    for(const e of (st.entries||[])){
+      if(e.pack!=="30L Keg") continue;
+      const k=[e.locationId,e.productId,e.batch||"",e.fleet||"Konvoy"].join("|");
+      const first=seen.get(k);
+      if(!first){ seen.set(k,e); continue; }
+      hit=true; drop.add(e);
+      /* the later line wins each shed it has a figure for */
+      if(e.counts){ first.counts=first.counts||{};
+        for(const a of COUNT_AREAS) if(e.counts[a]!=null) first.counts[a]=e.counts[a]; }
+      else if(e.qty!=null&&!first.counts) first.qty=e.qty;
+      if(e.erp!=null) first.erp=e.erp;
+      if(e.note) first.note=e.note;
+      if(e.recheck) first.recheck=true;
+      if(!first.bestBefore&&e.bestBefore) first.bestBefore=e.bestBefore;
+      if(!first.fleet) first.fleet=e.fleet||"Konvoy";
+    }
+    for(const e of seen.values()){
+      if(!e.counts) continue;
+      const vals=COUNT_AREAS.map(a=>e.counts[a]).filter(x=>x!=null);
+      if(vals.length) e.qty=Math.round(sum(vals)*100)/100;
+      else { delete e.qty; delete e.counts; }
+    }
+    if(!hit) continue;
+    st.entries=st.entries.filter(e=>!drop.has(e));
+    mended+=drop.size;
+    persist("stocktakes",st);
+  }
+  if(mended){ S.calcCache=null; console.log("mended "+mended+" stray 30L keg lines"); }
+  return mended;
+}
 function addBatchRow(st,locId){
   openDialog("Add a batch",b=>{
     const prods=S.products.slice().sort((a,b2)=>a.name.localeCompare(b2.name));
@@ -3092,9 +3159,11 @@ function lastWeekQty(st,e){
    which is what the ERP is compared against. A line counted before this existed
    keeps its single figure until somebody types into one of the sheds. */
 const COUNT_AREAS=["41 Tech","43 Tech"];
-/* 50L kegs belong to one pool or the other; everything else has no fleet */
+/* kegs, 50L and 30L alike, belong to one pool or the other; nothing else has a fleet.
+   This has to agree with PACKCOLS: a pack with a column per fleet must be in here,
+   or colKey() can never match the column it was typed into and the count is lost. */
 const KEG_FLEETS=["Konvoy","Your Mates"];
-const hasFleet=pack=>pack==="Keg";
+const hasFleet=pack=>pack==="Keg"||pack==="30L Keg";
 function areaQty(e,a){ return e.counts?e.counts[a]:undefined; }
 function setAreaQty(st,e,a,val){
   const v=num(val);
@@ -4018,6 +4087,216 @@ function editAdjust(s,preset){
       t.append(body); b.append(t);
     }
   },()=>{render();},"Done");
+}
+/* ============================ THE YEAR BY MONTH ============================
+   The weekly grid answers "what goes out this week". This answers the other
+   question: how is the year going. Volume rather than units, so a brand's cans
+   and kegs add up to one number, by month, against the same month last year.
+
+   A week belongs to the month its Monday falls in — the same rule the rest of
+   the app uses for everything else, and the only one that keeps a week whole. */
+let myUnit="L", myOpen={}, myFY=null;
+const MONTH_NAMES=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+/* the Australian financial year the date sits in: July to June */
+function fyOf(iso0){ const d=D(iso0); return d.getUTCMonth()>=6?d.getUTCFullYear():d.getUTCFullYear()-1; }
+function fyMonths(fy){
+  const out=[];
+  for(let i=0;i<12;i++){
+    const m=(6+i)%12, y=fy+(i<6?0:1);
+    out.push({key:y+"-"+String(m+1).padStart(2,"0"),label:MONTH_NAMES[m],year:y,month:m,
+      short:MONTH_NAMES[m]+" "+String(y).slice(2)});
+  }
+  return out;
+}
+const monthKeyOf=w=>{const d=D(w);return d.getUTCFullYear()+"-"+String(d.getUTCMonth()+1).padStart(2,"0");};
+const lastYearKey=k=>{const [y,m]=k.split("-");return (+y-1)+"-"+m;};
+
+/* What went out of the brewery, by week, for one SKU: the actual where there is
+   one, the forecast where there isn't. Covers any week, past or future. */
+function outByWeek(sku,c){
+  const by={};
+  const locs=activeLocs();
+  /* every week we hold history for */
+  const h=H(sku), weeks=(h&&h.weeks)||[];
+  for(const w of weeks){
+    const v=sum(locs.map(l=>at(sku,"out",histLoc(sku,"out",l.id),w)||0));
+    if(v) by[w]=v;
+  }
+  /* this week: the actual if it has been typed, else what is planned */
+  by[S.config.currentWeek]=c.outNow||by[S.config.currentWeek]||0;
+  /* and the weeks ahead */
+  c.weeks.forEach((w,i)=>{ by[w]=c.totalShip[i]||0; });
+  return by;
+}
+/* the whole page's figures, in litres */
+/* every Monday that falls in one of these months */
+function allWeeksIn(months){
+  const keys=new Set(months.map(m=>m.key));
+  const out=[];
+  let w=monday(months[0].year+"-"+String(months[0].month+1).padStart(2,"0")+"-01");
+  for(let i=0;i<60;i++,w=wkAdd(w,1)) if(keys.has(monthKeyOf(w))) out.push(w);
+  return out;
+}
+function monthlyVolumes(fy){
+  const months=fyMonths(fy), keys=new Set(months.map(m=>m.key));
+  /* a past week the weekly sheet has no column for is a week nobody has
+     entered. The month it sits in reads low, so it gets marked rather than
+     quietly counted as a fall against last year. */
+  const known=new Set();
+  for(const s of skus()){ const h=H(s.id); for(const w of (h.weeks||[])) known.add(w); }
+  const part={};
+  for(const w of allWeeksIn(months))
+    if(w<S.config.currentWeek&&!known.has(w)) part[monthKeyOf(w)]=(part[monthKeyOf(w)]||0)+1;
+  const lyKeys=new Set(months.map(m=>lastYearKey(m.key)));
+  const brands=new Map();
+  for(const s of skus()){
+    const c=compute(s.id);
+    const lpu=litresPerUnit(s.product.id,s.pack);
+    const by=outByWeek(s.id,c);
+    const row={id:s.id,label:s.product.name+" "+s.pack,pack:s.pack,units:{},vol:{},ly:{},lyUnits:{}};
+    for(const w of Object.keys(by)){
+      const k=monthKeyOf(w), u=by[w]||0;
+      if(!u) continue;
+      if(keys.has(k)){ row.units[k]=(row.units[k]||0)+u; row.vol[k]=(row.vol[k]||0)+u*lpu; }
+      else if(lyKeys.has(k)){ const tk=k.split("-"); const fwd=(+tk[0]+1)+"-"+tk[1];
+        row.ly[fwd]=(row.ly[fwd]||0)+u*lpu; row.lyUnits[fwd]=(row.lyUnits[fwd]||0)+u; }
+    }
+    if(!brands.has(s.product.id))
+      brands.set(s.product.id,{id:s.product.id,name:s.product.name,rows:[],vol:{},ly:{}});
+    const b=brands.get(s.product.id);
+    b.rows.push(row);
+    for(const k of Object.keys(row.vol)) b.vol[k]=(b.vol[k]||0)+row.vol[k];
+    for(const k of Object.keys(row.ly)) b.ly[k]=(b.ly[k]||0)+row.ly[k];
+  }
+  const list=[...brands.values()].filter(b=>months.some(m=>b.vol[m.key]||b.ly[m.key]));
+  list.sort((a,b)=>sum(months.map(m=>b.vol[m.key]||0))-sum(months.map(m=>a.vol[m.key]||0)));
+  return {months,brands:list,part};
+}
+const vol=v=>myUnit==="hL"?(v==null?null:v/100):v;
+const volTxt=v=>{
+  if(v==null||!isFinite(v)||Math.abs(v)<0.005) return "—";
+  const x=vol(v);
+  return myUnit==="hL"?x.toLocaleString(undefined,{maximumFractionDigits:1}):n0(x);
+};
+const varTxt=(ty,ly)=>{
+  if(!ly) return null;
+  const p=Math.round(((ty||0)-ly)/ly*100);
+  return (p>0?"+":"")+p+"%";
+};
+function viewMonths(pane,ctl){
+  const fy=myFY==null?fyOf(S.config.currentWeek):myFY;
+  const {months,brands,part}=withHorizon(60,()=>monthlyVolumes(fy));
+  ctl.append(sel([[fy-1,"FY "+String(fy-1).slice(2)+"/"+String(fy).slice(2)],
+                  [fy,"FY "+String(fy).slice(2)+"/"+String(fy+1).slice(2)]],fy,
+    {title:"Which financial year",onchange:e=>{myFY=+e.target.value;render();}}));
+  ctl.append(sel([["L","Litres"],["hL","Hectolitres"]],myUnit,
+    {title:"How to show volume",onchange:e=>{myUnit=e.target.value;render();}}));
+  ctl.append(el("button",{class:"btn",title:"Show every SKU under its brand",
+    onclick:()=>{const any=Object.values(myOpen).some(Boolean);
+      myOpen={}; if(!any) for(const b of brands) myOpen[b.id]=true; render();}},"Expand / collapse"));
+
+  const thisM=monthKeyOf(S.config.currentWeek);
+  const tot=k=>sum(brands.map(b=>b.vol[k]||0));
+  const totLy=k=>sum(brands.map(b=>b.ly[k]||0));
+  /* only the months with every week entered: a half-entered month would read
+     as a collapse against last year */
+  const past=months.filter(m=>m.key<thisM&&!part[m.key]), ytdKeys=past.map(m=>m.key);
+  const ytd=sum(ytdKeys.map(tot)), ytdLy=sum(ytdKeys.map(totLy));
+  const year=sum(months.map(m=>tot(m.key))), yearLy=sum(months.map(m=>totLy(m.key)));
+
+  const t=el("div",{class:"tiles"});
+  t.append(tile("Year to "+(past.length?past[past.length-1].short:"start"),
+    volTxt(ytd)+" "+myUnit,
+    ytdLy?(varTxt(ytd,ytdLy)+" on last year"):"no last year to compare"));
+  t.append(tile("Full year, forecast",volTxt(year)+" "+myUnit,
+    yearLy?(varTxt(year,yearLy)+" on "+volTxt(yearLy)+" "+myUnit):"—"));
+  /* a beer that did a pallet last year and two this year is not the story */
+  const movers=brands.map(b=>({b,ty:sum(months.map(m=>b.vol[m.key]||0)),
+                               ly:sum(months.map(m=>b.ly[m.key]||0))}))
+    .filter(x=>x.ly>yearLy*0.02).map(x=>Object.assign(x,{p:(x.ty-x.ly)/x.ly}));
+  const up=movers.slice().sort((a,b)=>b.p-a.p)[0], down=movers.slice().sort((a,b)=>a.p-b.p)[0];
+  if(up) t.append(tile("Biggest gain",up.b.name,varTxt(up.ty,up.ly)+" on last year","good"));
+  if(down&&down.p<0) t.append(tile("Biggest drop",down.b.name,
+    varTxt(down.ty,down.ly)+" on last year","warn"));
+  pane.append(t);
+
+  pane.append(el("div",{class:"note"},el("b",{},"What leaves the brewery. "),
+    "Actual shipments up to this week, the forecast after it, converted to volume so cans "+
+    "and kegs add up. A week counts in the month its Monday falls in. Last year is what "+
+    "actually went out in the same month."));
+
+  const wrap=el("div",{class:"sheet"});
+  const tbl=el("table",{class:"fg big months"});
+  const hr=el("tr",{});
+  hr.append(el("th",{class:"stick"},"Brand"));
+  for(const m of months){
+    const th=el("th",{class:"num mth"+(m.key===thisM?" now nowcol":"")+(m.key<thisM?" done":"")},
+      el("b",{},m.label),String(m.year).slice(2));
+    if(part[m.key]){
+      th.append(el("span",{class:"partmark",
+        title:part[m.key]+" week"+(part[m.key]===1?"":"s")+" of this month have no figures entered, "+
+              "so it reads low against last year"},"part"));
+    }
+    hr.append(th);
+  }
+  hr.append(el("th",{class:"num tot"},el("b",{},"Year"),el("span",{class:"hint"}," "+myUnit)));
+  tbl.append(el("thead",{},hr));
+
+  const cell=(ty,ly,cls)=>{
+    const td=el("td",{class:"num mcell "+(cls||"")});
+    td.append(el("div",{class:"v"},volTxt(ty)));
+    const v=varTxt(ty,ly);
+    if(ly) td.append(el("div",{class:"cmp"+(v&&v.startsWith("-")?" down":" up")},
+      volTxt(ly)+" · "+v));
+    else td.append(el("div",{class:"cmp dim"},"—"));
+    if(ly) td.title="Last year "+volTxt(ly)+" "+myUnit+", this year "+volTxt(ty)+" "+myUnit;
+    return td;
+  };
+
+  for(const b of brands){
+    const tb=el("tbody",{class:"brandblock",id:"brand-"+b.id});
+    const tr=el("tr",{class:"brandrow"});
+    const open=!!myOpen[b.id];
+    const lab=el("td",{class:"stick"},
+      el("div",{class:"lbl",style:"cursor:pointer",
+        onclick:()=>{myOpen[b.id]=!open;render();}},
+        el("span",{html:'<svg class="caret'+(open?" open":"")+'" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>'}).firstChild,
+        swatch(b.rows[0]?b.rows[0].id:b.id),el("b",{},b.name)));
+    tr.append(lab);
+    for(const m of months) tr.append(cell(b.vol[m.key],b.ly[m.key],
+      (m.key===thisM?"nowcol ":"")+(m.key>thisM?"fcast":"")));
+    tr.append(cell(sum(months.map(m=>b.vol[m.key]||0)),sum(months.map(m=>b.ly[m.key]||0)),"tot"));
+    tb.append(tr);
+    if(open) for(const r of b.rows.slice().sort((x,y)=>x.label.localeCompare(y.label))){
+      const sr=el("tr",{class:"skurow"});
+      sr.append(el("td",{class:"stick"},el("div",{class:"lbl"},
+        el("span",{style:"padding-left:24px"},r.pack),
+        el("span",{class:"hint",style:"margin-left:6px"},
+          n0(sum(months.map(m=>r.units[m.key]||0)))+" "+(PACK_UNIT[r.pack]||"units").toLowerCase()))));
+      for(const m of months) sr.append(cell(r.vol[m.key],r.ly[m.key],
+        (m.key===thisM?"nowcol ":"")+(m.key>thisM?"fcast":"")));
+      sr.append(cell(sum(months.map(m=>r.vol[m.key]||0)),sum(months.map(m=>r.ly[m.key]||0)),"tot"));
+      tb.append(sr);
+    }
+    tbl.append(tb);
+  }
+  const foot=el("tbody",{class:"brandblock"});
+  const ft=el("tr",{class:"totalrow"});
+  ft.append(el("td",{class:"stick"},el("div",{class:"lbl"},el("b",{},"Every brand"))));
+  for(const m of months) ft.append(cell(tot(m.key),totLy(m.key),
+    (m.key===thisM?"nowcol ":"")+(m.key>thisM?"fcast":"")));
+  ft.append(cell(year,yearLy,"tot"));
+  foot.append(ft); tbl.append(foot);
+  wrap.append(tbl); pane.append(wrap);
+}
+/* the forecast normally runs to the horizon on the Forecast page; the year
+   needs more of it, so this borrows a longer one and puts it back */
+function withHorizon(n,fn){
+  const was=S.config.horizon, cache=S.calcCache;
+  if(was>=n) return fn();
+  S.config.horizon=n; S.calcCache=null;
+  try{ return fn(); }
+  finally{ S.config.horizon=was; S.calcCache=cache; }
 }
 /* ---- returns ----
    Everything recorded about stock that came back from one channel, with the
