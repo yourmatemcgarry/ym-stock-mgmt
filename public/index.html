@@ -18,6 +18,9 @@
   --ok:#1C7A46; --ok-soft:#DDEFE4;
   --warn:#9A6206; --warn-soft:#F6EBD6;
   --crit:#A82D25; --crit-soft:#F7E1DF;
+  /* the sheds on the stocktake sheet: 41 Tech teal, 43 Tech indigo */
+  --sh1-soft:#E8F2F4; --sh1-head:#D3E6EA; --sh1-ink:#083F4A;
+  --sh2-soft:#ECEAF6; --sh2-head:#DCD8EE; --sh2-ink:#423A77;
   --shadow:0 1px 2px rgba(16,22,25,.06), 0 8px 24px -12px rgba(16,22,25,.18);
   --r:6px;
   --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
@@ -33,6 +36,8 @@
     --accent:#54B4C6; --accent-2:#6FC8D8; --accent-soft:#17323A; --accent-ink:#9BD8E4;
     --ok:#5CC488; --ok-soft:#16302270; --warn:#E0A845; --warn-soft:#33270E70;
     --crit:#F08076; --crit-soft:#3A1D1A70;
+  --sh1-soft:#152A30; --sh1-head:#1C3D46; --sh1-ink:#9BD8E4;
+  --sh2-soft:#211D33; --sh2-head:#2E2850; --sh2-ink:#C2BBEC;
     --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 28px -14px rgba(0,0,0,.7);
     color-scheme:dark;
   }
@@ -151,9 +156,29 @@ table.months .caret.open{transform:rotate(90deg)}
 /* the batch sheet */
 table.bsheet th.grp{text-align:center;background:var(--sunk);border-left:2px solid var(--line);
   font-size:10px;letter-spacing:.1em}
-table.bsheet th.grp.erp{background:var(--warn-soft);color:var(--warn)}
 table.bsheet th.pk{font-size:9.5px;white-space:nowrap}
-table.bsheet th.pk.erp{color:var(--warn)}
+/* one colour per shed, another for the ERP, so nobody types a figure into the
+   wrong half of a wide sheet. The tint carries all the way down the column. */
+table.bsheet th.grp.g1{background:var(--sh1-head);color:var(--sh1-ink)}
+table.bsheet th.grp.g2{background:var(--sh2-head);color:var(--sh2-ink)}
+table.bsheet th.grp.gerp{background:var(--warn-soft);color:var(--warn)}
+table.bsheet th.pk.g1{background:var(--sh1-soft);color:var(--sh1-ink)}
+table.bsheet th.pk.g2{background:var(--sh2-soft);color:var(--sh2-ink)}
+table.bsheet th.pk.gerp{background:var(--warn-soft);color:var(--warn)}
+table.bsheet td.cell.g1{background:var(--sh1-soft)}
+table.bsheet td.cell.g2{background:var(--sh2-soft)}
+table.bsheet td.cell.gerp{background:var(--warn-soft)}
+table.bsheet th.g1:first-of-type,table.bsheet th.g2:first-of-type{border-left:2px solid var(--line)}
+table.bsheet .offmark{font-size:8px;color:var(--muted);margin-left:3px;letter-spacing:0}
+/* choosing which pack types the sheet counts */
+.pclist{display:flex;flex-direction:column;gap:2px;margin-top:4px}
+.pcrow{display:flex;align-items:center;gap:9px;padding:6px 8px;border-radius:var(--r);
+  border:1px solid var(--line-soft);cursor:pointer}
+.pcrow:hover{background:var(--surface-2)}
+.pcrow.on{background:var(--accent-soft);border-color:var(--accent)}
+.pcrow .mono{font-size:10.5px}
+table.bsheet tbody tr:hover td.cell.g1{background:var(--sh1-head)}
+table.bsheet tbody tr:hover td.cell.g2{background:var(--sh2-head)}
 table.bsheet th.stick,table.bsheet td.stick{position:sticky;left:0;z-index:4;
   background:var(--surface);min-width:150px;max-width:150px}
 table.bsheet th.stick2,table.bsheet td.stick2{position:sticky;left:150px;z-index:4;
@@ -459,7 +484,7 @@ dialog footer{padding:12px 16px;border-top:1px solid var(--line-soft);display:fl
 /* Which build this is. It shows at the bottom of the sidebar and on Setup, so
    there is never any doubt about whether a deploy actually landed: if the
    stamp hasn't changed after deploying, the browser is still on the old file. */
-const BUILD="2026-11-09 · 30L keg counts save again";
+const BUILD="2026-11-09c · the sheds in colour, and the sheet’s pack types are yours to choose";
 /* ============================ helpers ============================ */
 const $ = (s,r)=> (r||document).querySelector(s);
 const el = (t,a,...k)=>{const n=document.createElement(t);
@@ -580,17 +605,89 @@ function syncChip(){
 }
 /* Two people can be counting at once, one of them offline. When a queued
    stocktake finally goes up, fold it into whatever the server has rather than
-   flattening the other person's lines. */
+   flattening the other person's lines.
+
+   Lines are matched on the CELL they belong to — the place, the beer, the batch
+   and the column — never on their id. Matching on id meant two lines for the
+   same cell counted as two different things, so a line this device had merged
+   away or deleted came straight back from the server on the next save, and the
+   figure on the sheet flipped between the two. A cell the server knows about
+   and this device does not is new work by somebody else, and is taken as it is.
+   A cell both sides hold keeps every shed figure only one of them has, so a
+   save can never rub out a shed this device never touched. */
+const figOf=(e,a)=>(e.counts&&e.counts[a]!=null)?e.counts[a]:null;
+const stampOf=(e,a)=>(e.at&&e.at[a])||0;
+/* fold one side's figure for one shed into the other, newest wins. A shed
+   somebody cleared is a figure of its own — it has a time on it too, so an
+   older copy of the sheet cannot put the old number back. */
+function foldShed(m,t,a){
+  const sm=stampOf(m,a), st=stampOf(t,a), f=figOf(t,a);
+  if(st>sm||(!sm&&!st&&figOf(m,a)==null&&f!=null)){
+    m.at=m.at||{}; if(st) m.at[a]=st;
+    if(f==null){ if(m.counts) delete m.counts[a]; }
+    else { m.counts=m.counts||{}; m.counts[a]=f; }
+  }
+}
 async function mergeStocktake(doc){
   try{
     const rows=await S.backend.list("stocktakes");
     const theirs=rows.find(r=>r.id===doc.id);
     if(!theirs||!Array.isArray(theirs.entries)) return doc;
-    const mine=new Map((doc.entries||[]).map(e=>[e.id,e]));
-    const merged=(doc.entries||[]).slice();
-    for(const e of theirs.entries) if(!mine.has(e.id)) merged.push(e);
-    return Object.assign({},doc,{entries:merged});
+    const gone=new Set((doc.gone||[]).concat(theirs.gone||[]));
+    const byCell=new Map();
+    for(const e of (doc.entries||[])){
+      if(gone.has(entryKey(e))) continue;
+      byCell.set(entryKey(e),JSON.parse(JSON.stringify(e)));  /* mine, deduped by cell */
+    }
+    for(const t of (theirs.entries||[])){
+      const k=entryKey(t);
+      if(gone.has(k)) continue;                      /* deliberately taken off the sheet */
+      const m=byCell.get(k);
+      if(!m){ byCell.set(k,t); continue; }           /* somebody else's new cell */
+      for(const a of COUNT_AREAS) foldShed(m,t,a);
+      if(m.qty==null&&!m.counts&&t.qty!=null) m.qty=t.qty;
+      if(m.erp==null&&t.erp!=null) m.erp=t.erp;
+      if(!m.note&&t.note) m.note=t.note;
+      if(!m.recheck&&t.recheck) m.recheck=true;
+      if(!m.bestBefore&&t.bestBefore) m.bestBefore=t.bestBefore;
+      reTotal(m);
+    }
+    return Object.assign({},doc,{entries:[...byCell.values()],gone:[...gone]});
   }catch(e){ return doc; }
+}
+/* The store cannot be told "write this only if nothing has changed", so two
+   devices saving in the same breath can each read the sheet before the other
+   writes, and one person's count goes missing. So after writing, read the
+   sheet back: if a figure this device holds did not arrive, merge again — this
+   time the other save IS there — and write again. It settles in one more go.
+   (Devices stamp their own counts, so the two clocks want to be roughly right;
+   a minute or two apart changes nothing, an hour could.) */
+async function saveStocktake(doc){
+  let out=doc;
+  for(let i=0;i<4;i++){
+    out=await mergeStocktake(out);
+    await S.backend.set("stocktakes",out);
+    if(!await stocktakeLost(out)) break;
+  }
+  return out;
+}
+async function stocktakeLost(doc){
+  try{
+    const rows=await S.backend.list("stocktakes");
+    const theirs=rows.find(r=>r.id===doc.id);
+    if(!theirs) return true;
+    const got=new Map((theirs.entries||[]).map(e=>[entryKey(e),e]));
+    for(const e of (doc.entries||[])){
+      const t=got.get(entryKey(e));
+      if(!t) return true;
+      for(const a of COUNT_AREAS){
+        const f=figOf(e,a);
+        if(f!=null&&figOf(t,a)!==f&&stampOf(t,a)<=stampOf(e,a)) return true;
+      }
+      if(!e.counts&&e.qty!=null&&t.qty!==e.qty) return true;
+    }
+    return false;
+  }catch(err){ return false; }   /* no signal: the queue keeps it for later */
 }
 let flushing=false;
 async function flushOutbox(){
@@ -600,7 +697,8 @@ async function flushOutbox(){
     while(outbox.length){
       const x=outbox[0];
       if(x.op==="del") await S.backend.del(x.kind,x.id);
-      else await S.backend.set(x.kind,x.kind==="stocktakes"?await mergeStocktake(x.doc):x.doc);
+      else if(x.kind==="stocktakes") await saveStocktake(x.doc);
+      else await S.backend.set(x.kind,x.doc);
       /* drop the exact item that went up. If a newer version of the same
          document was queued while this one was in flight, that newer one is a
          different object and stays in the queue to be sent next — shifting
@@ -645,7 +743,7 @@ async function loadAll(){
   if(ru&&ru.length) S.runs=ru;
   /* anything still queued on this device is newer than what came back */
   applyOutbox();
-  mendKegLines();
+  mendDupeLines();
   S.products.sort((a,b2)=>(a.sort|0)-(b2.sort|0));
   S.locations.sort((a,b2)=>(a.sort|0)-(b2.sort|0));
   S.stock.sort((a,b2)=>a.weekStart<b2.weekStart?1:-1);
@@ -2763,6 +2861,9 @@ function viewStocktake(pane,ctl){
     ctl.append(el("button",{class:"btn"+(stErp?" pri":""),
       title:"Show what the ERP holds beside what was counted",
       onclick:()=>{stErp=!stErp;render();}},stErp?"ERP columns on":"ERP columns"));
+    ctl.append(el("button",{class:"btn",
+      title:"Choose which pack types the sheet has a column for",
+      onclick:()=>editPackCols(st)},"Pack types ("+colsOn().length+")"));
   }
   ctl.append(el("button",{class:"btn pri",onclick:newStocktake},"New stocktake"));
   if(!st){
@@ -2823,6 +2924,7 @@ function viewStocktake(pane,ctl){
 
   /* the coldroom first, then anywhere else we count ourselves. The places that
      report their own figure are typed into the forecast, not counted here. */
+  const cols=sheetCols(st);
   const sheet=locOrder.filter(lid=>!reportsOwn(lid));
   sheet.sort((a,b)=>(a==="coldroom"?-1:b==="coldroom"?1:((L(a)||{}).sort|0)-((L(b)||{}).sort|0)));
   for(const lid of sheet){
@@ -2849,13 +2951,18 @@ function viewStocktake(pane,ctl){
       el("th",{class:"stick",rowspan:"2"},"Beer"),
       el("th",{class:"stick2",rowspan:"2"},"Batch"));
     const h2=el("tr",{});
+    /* each shed has its own colour, the ERP another again, so a figure is never
+       typed into the wrong half of the sheet */
     for(const shed of COUNT_AREAS){
-      h1.append(el("th",{class:"grp",colspan:String(PACKCOLS.length)},shed));
-      for(const pc of PACKCOLS) h2.append(el("th",{class:"num pk"},pc.label));
+      const g=shedClass(shed);
+      h1.append(el("th",{class:"grp "+g,colspan:String(cols.length)},shed));
+      for(const pc of cols) h2.append(el("th",{class:"num pk "+g,
+        title:pc.off?(pc.label+" is switched off, but has been counted on this sheet"):pc.label},
+        pc.label,pc.off?el("span",{class:"offmark",title:"switched off"},"·off"):null));
     }
     if(stErp){
-      h1.append(el("th",{class:"grp erp",colspan:String(PACKCOLS.length)},"ERP"));
-      for(const pc of PACKCOLS) h2.append(el("th",{class:"num pk erp"},pc.label));
+      h1.append(el("th",{class:"grp gerp",colspan:String(cols.length)},"ERP"));
+      for(const pc of cols) h2.append(el("th",{class:"num pk gerp"},pc.label));
     }
     h1.append(el("th",{class:"num",rowspan:"2",title:"Counted less what the ERP holds"},"Diff"),
       el("th",{rowspan:"2"},"Why"),
@@ -2878,20 +2985,20 @@ function viewStocktake(pane,ctl){
         onchange:ev=>{const v=ev.target.value.trim();
           for(const e of r.entries) e.batch=v;
           stSave(st); render();}})));
-      for(const shed of COUNT_AREAS) for(const pc of PACKCOLS){
+      for(const shed of COUNT_AREAS) for(const pc of cols){
         const e=cellEntry(st,lid,r,pc,false);
         const v=e&&e.counts?e.counts[shed]:undefined;
-        tr.append(el("td",{class:"cell"},el("input",{class:"cellinp num qty",type:"text",
+        tr.append(el("td",{class:"cell "+shedClass(shed)},el("input",{class:"cellinp num qty",type:"text",
           inputmode:"decimal",value:v!=null?nq(v):"",placeholder:"·",
           title:pc.label+" at "+shed+" — blank means nobody has been to it, 0 means none there",
           onfocus:ev=>ev.target.select(), onkeydown:ev=>stepCell(ev),
           onchange:ev=>{setAreaQty(st,cellEntry(st,lid,r,pc,true),shed,ev.target.value);
             reflow();}})));
       }
-      if(stErp) for(const pc of PACKCOLS){
+      if(stErp) for(const pc of cols){
         const e=cellEntry(st,lid,r,pc,false);
         const diff=e?stDiff(e):null;
-        tr.append(el("td",{class:"cell"},el("input",{class:"cellinp num"+(diff?" owes":""),
+        tr.append(el("td",{class:"cell gerp"},el("input",{class:"cellinp num"+(diff?" owes":""),
           type:"text",inputmode:"decimal",value:e&&e.erp!=null?nq(e.erp):"",placeholder:"·",
           title:diff?("Counted "+nq(e.qty)+", ERP says "+nq(e.erp)+" — "+(diff>0?"+":"")+nq(diff))
                     :("What the ERP holds for this batch in "+pc.label),
@@ -2925,8 +3032,7 @@ function viewStocktake(pane,ctl){
       tr.append(el("td",{class:"mono dim"},d==null?"—":String(d)));
       tr.append(el("td",{},el("button",{class:"btn sm",title:"Remove this batch from the sheet",
         onclick:()=>{if(!confirm("Remove batch "+(r.batch||"—")+" from the sheet?"))return;
-          const ids=new Set(r.entries.map(e=>e.id));
-          st.entries=(st.entries||[]).filter(x=>!ids.has(x.id));
+          forget(st,r.entries);
           stSave(st); render();}},"×")));
       body.append(tr);
     }
@@ -2968,14 +3074,57 @@ function viewStocktake(pane,ctl){
 /* ---- the sheet's shape ----
    A row is one batch of one beer in one place. The columns across it are the
    pack it was filled into and, for kegs, whose keg it is. */
-const PACKCOLS=[
+const PACKCOL_ALL=[
   {k:"Can",                label:"Carton",     pack:"Can"},
   {k:"10 Pack",            label:"10 Pack",    pack:"10 Pack"},
   {k:"Keg|Konvoy",         label:"50L Konvoy", pack:"Keg",     fleet:"Konvoy"},
   {k:"Keg|Your Mates",     label:"50L Mates",  pack:"Keg",     fleet:"Your Mates"},
   {k:"30L Keg|Konvoy",     label:"30L Konvoy", pack:"30L Keg", fleet:"Konvoy"},
   {k:"30L Keg|Your Mates", label:"30L Mates",  pack:"30L Keg", fleet:"Your Mates"}];
+/* what a fresh brewery counts. We don't fill 30L in our own kegs, so that
+   column is off until somebody turns it on. */
+const PACKCOL_ON=["Can","10 Pack","Keg|Konvoy","Keg|Your Mates","30L Keg|Konvoy"];
+/* every column that exists, the built-in ones and any added since */
+const colAll=()=>PACKCOL_ALL.concat(S.config.packColsAdded||[]);
+const colDef=k=>colAll().find(c=>c.k===k)||null;
+const colsOn=()=>(S.config.packCols||PACKCOL_ON).map(colDef).filter(Boolean);
+/* The columns this sheet draws: the ones that are on, plus any switched-off
+   column that already has something counted in it. A count is never hidden
+   because of a setting — it shows, marked, until somebody clears it. */
+function sheetCols(st){
+  const on=colsOn(), have=new Set(on.map(c=>c.k));
+  const used=new Set();
+  for(const e of (st&&st.entries||[])){
+    const k=colKey(e);
+    if(!have.has(k)&&(e.counts||e.qty!=null||e.erp!=null)) used.add(k);
+  }
+  const extra=[...used].map(colDef).filter(Boolean)
+    .map(c=>Object.assign({},c,{off:true}));
+  return on.concat(extra);
+}
+/* kept so anything outside the sheet can still ask what the columns are */
+const PACKCOLS=PACKCOL_ALL;
 const colKey=e=>hasFleet(e.pack)?(e.pack+"|"+(e.fleet||"Konvoy")):e.pack;
+/* which cell on the sheet a line belongs to. Two lines with this same key are
+   the same cell counted twice, whatever their ids say, and must never both
+   survive — see mergeStocktake(). */
+const entryKey=e=>[e.locationId,e.productId,e.batch||"",colKey(e)].join("|");
+/* a line's figure is always its sheds added up */
+function reTotal(e){
+  if(!e.counts) return e;
+  const v=COUNT_AREAS.map(a=>e.counts[a]).filter(x=>x!=null);
+  if(v.length) e.qty=Math.round(sum(v)*100)/100;
+  else { delete e.qty; delete e.counts; }
+  return e;
+}
+/* take a cell off the sheet for good, so a save from another device or an older
+   copy of this one cannot put it back */
+function forget(st,entries){
+  st.gone=st.gone||[];
+  for(const e of entries){ const k=entryKey(e); if(!st.gone.includes(k)) st.gone.push(k); }
+  const ids=new Set(entries.map(e=>e.id));
+  st.entries=(st.entries||[]).filter(x=>!ids.has(x.id));
+}
 function batchRows(st,locId){
   const by=new Map();
   for(const e of (st.entries||[])){
@@ -2992,54 +3141,136 @@ function batchRows(st,locId){
     return an===bn?String(a.batch).localeCompare(String(b.batch)):an.localeCompare(bn);
   });
 }
-/* the line behind one cell — made only when somebody types in it */
+/* the line behind one cell — made only when somebody types in it.
+   If a cell somehow has more than one line behind it, the one that has been
+   counted is the one the sheet shows, so what is on screen never depends on
+   the order the lines happen to sit in. */
 function cellEntry(st,locId,row,pc,make){
-  let e=row.entries.find(x=>colKey(x)===pc.k);
+  const hits=row.entries.filter(x=>colKey(x)===pc.k);
+  let e=hits.find(x=>x.counts||x.qty!=null)||hits[0];
   if(e||!make) return e;
   e={id:uid("e"),productId:row.productId,pack:pc.pack,locationId:locId,
      batch:row.batch||"",bestBefore:row.bestBefore||null};
   if(pc.fleet) e.fleet=pc.fleet;
   st.entries=st.entries||[]; st.entries.push(e); row.entries.push(e);
+  /* counting it again un-forgets it */
+  if(st.gone&&st.gone.length) st.gone=st.gone.filter(k=>k!==entryKey(e));
   return e;
 }
-/* ---- one-off repair ----
+/* ---- repair ----
    Until 9 Nov 2026 the 30L keg columns were not recognised as having a fleet, so
    every time somebody typed into one the sheet made a fresh line instead of
    finding the one already there. The counts were saved, just scattered over
-   several invisible lines. This folds them back into one line per cell. */
-function mendKegLines(){
+   several invisible lines, and the sheet showed whichever happened to be first.
+   This folds every cell back into one line. It runs on each load and is safe to
+   run again: with nothing to mend it changes nothing and saves nothing. */
+function mendDupeLines(){
   let mended=0;
   for(const st of (S.stock||[])){
-    const seen=new Map(); const drop=new Set(); let hit=false;
+    const keep=new Map(); const drop=new Set();
     for(const e of (st.entries||[])){
-      if(e.pack!=="30L Keg") continue;
-      const k=[e.locationId,e.productId,e.batch||"",e.fleet||"Konvoy"].join("|");
-      const first=seen.get(k);
-      if(!first){ seen.set(k,e); continue; }
-      hit=true; drop.add(e);
-      /* the later line wins each shed it has a figure for */
-      if(e.counts){ first.counts=first.counts||{};
-        for(const a of COUNT_AREAS) if(e.counts[a]!=null) first.counts[a]=e.counts[a]; }
-      else if(e.qty!=null&&!first.counts) first.qty=e.qty;
+      const k=entryKey(e), first=keep.get(k);
+      if(!first){ keep.set(k,e); continue; }
+      drop.add(e);
+      /* a shed figure on the stray fills one the kept line is missing; where
+         both have the shed, the stray is the later write, so it wins */
+      for(const a of COUNT_AREAS){
+        const f=figOf(e,a);
+        if(f==null||stampOf(e,a)<stampOf(first,a)) continue;
+        first.counts=first.counts||{}; first.counts[a]=f;
+        if(stampOf(e,a)){ first.at=first.at||{}; first.at[a]=stampOf(e,a); }
+      }
+      if(first.qty==null&&!first.counts&&e.qty!=null) first.qty=e.qty;
       if(e.erp!=null) first.erp=e.erp;
       if(e.note) first.note=e.note;
       if(e.recheck) first.recheck=true;
       if(!first.bestBefore&&e.bestBefore) first.bestBefore=e.bestBefore;
-      if(!first.fleet) first.fleet=e.fleet||"Konvoy";
     }
-    for(const e of seen.values()){
-      if(!e.counts) continue;
-      const vals=COUNT_AREAS.map(a=>e.counts[a]).filter(x=>x!=null);
-      if(vals.length) e.qty=Math.round(sum(vals)*100)/100;
-      else { delete e.qty; delete e.counts; }
-    }
-    if(!hit) continue;
-    st.entries=st.entries.filter(e=>!drop.has(e));
+    if(!drop.size) continue;
+    for(const e of keep.values()) reTotal(e);
+    st.entries=(st.entries||[]).filter(e=>!drop.has(e));
     mended+=drop.size;
     persist("stocktakes",st);
   }
-  if(mended){ S.calcCache=null; console.log("mended "+mended+" stray 30L keg lines"); }
+  if(mended){ S.calcCache=null; console.log("mended "+mended+" stray lines"); }
   return mended;
+}
+/* ---- which pack types the sheet counts ----
+   Switch a column off when we stop filling that pack, on again when we start.
+   Switching one off hides the column; it never deletes a count, and a column
+   with something counted in it keeps showing until that count is cleared. */
+function editPackCols(st){
+  const used=new Map();          /* how much is counted in each column, sheet-wide */
+  for(const e of (st&&st.entries||[])){
+    const k=colKey(e), n=(e.qty||0);
+    if(e.counts||e.qty!=null) used.set(k,(used.get(k)||0)+n);
+  }
+  let on=(S.config.packCols||PACKCOL_ON).slice();
+  openDialog("Pack types on the stocktake sheet",b=>{
+    b.append(el("div",{class:"note"},"The sheet gets one column per pack type, in every shed. ",
+      "Turning one off only tidies the sheet — what has already been counted is kept, ",
+      "and a switched-off column with a count still showing is marked ",
+      el("b",{},"·off"),"."));
+    const list=el("div",{class:"pclist",id:"pcList"});
+    const draw=()=>{
+      clear(list);
+      for(const c of colAll()){
+        const isOn=on.includes(c.k), n=used.get(c.k)||0;
+        list.append(el("label",{class:"pcrow"+(isOn?" on":"")},
+          el("input",{type:"checkbox",checked:isOn,onchange:ev=>{
+            if(ev.target.checked){ if(!on.includes(c.k)) on.push(c.k); }
+            else on=on.filter(x=>x!==c.k);
+            draw();
+          }}),
+          el("b",{},c.label),
+          el("span",{class:"dim mono"},c.pack+(c.fleet?" · "+c.fleet:"")),
+          el("span",{style:"flex:1"}),
+          n?el("span",{class:"chip warn"},nq(n)+" counted"):null));
+      }
+    };
+    draw(); b.append(list);
+    b.append(el("div",{class:"row",style:"margin-top:10px"},
+      el("button",{class:"btn sm",type:"button",
+        onclick:()=>addPackCol(st)},"Add a pack type")));
+  },()=>{
+    if(!on.length){ flash("The sheet needs at least one pack type"); return false; }
+    S.config.packCols=on; persist("config",S.config);
+    flash("The sheet now has "+on.length+" pack type"+(on.length===1?"":"s"));
+  },"Save");
+}
+/* a pack type the sheet did not have a column for. Kegs are counted by pool, so
+   a keg pack gets a column per pool; anything else gets the one column. */
+function addPackCol(st){
+  openDialog("Add a pack type",b=>{
+    b.append(el("div",{class:"grid3"},
+      field("Pack",sel(PACKS.map(p=>[p,p]),"Can",{id:"npPack"})),
+      field("Keg pool",sel([["","— not a keg —"],...KEG_FLEETS.map(f=>[f,f])],"",{id:"npFleet"})),
+      field("What to call the column",el("input",{type:"text",id:"npLabel",
+        placeholder:"e.g. 20L Konvoy"}))));
+    b.append(el("div",{class:"note"},"The pack has to be one the beers are already filled into, ",
+      "so litres, shelf life and the forecast keep working. Only kegs can be split by pool."));
+  },body=>{
+    const pack=$("#npPack",body).value;
+    const fleet=$("#npFleet",body).value||"";
+    const label=($("#npLabel",body).value||"").trim()||(fleet?pack+" "+fleet:pack);
+    if(fleet&&!hasFleet(pack)){ flash(pack+" is not counted by keg pool"); return false; }
+    if(!fleet&&hasFleet(pack)){ flash(pack+" has to say which pool it is"); return false; }
+    const k=fleet?(pack+"|"+fleet):pack;
+    if(colDef(k)){
+      /* it already exists — just switch it on */
+      const on=(S.config.packCols||PACKCOL_ON).slice();
+      if(!on.includes(k)) on.push(k);
+      S.config.packCols=on; persist("config",S.config);
+      flash(colDef(k).label+" is on the sheet");
+      editPackCols(st); return;
+    }
+    S.config.packColsAdded=(S.config.packColsAdded||[])
+      .concat([fleet?{k,label,pack,fleet}:{k,label,pack}]);
+    S.config.packCols=(S.config.packCols||PACKCOL_ON).concat([k]);
+    persist("config",S.config);
+    flash(label+" added to the sheet");
+    editPackCols(st);
+  },"Add");
 }
 function addBatchRow(st,locId){
   openDialog("Add a batch",b=>{
@@ -3159,6 +3390,9 @@ function lastWeekQty(st,e){
    which is what the ERP is compared against. A line counted before this existed
    keeps its single figure until somebody types into one of the sheds. */
 const COUNT_AREAS=["41 Tech","43 Tech"];
+/* each shed gets its own tint on the sheet. The colour follows the shed's
+   place in the list, so adding a third shed gives it the third tint. */
+const shedClass=a=>"g"+((COUNT_AREAS.indexOf(a)+1)||9);
 /* kegs, 50L and 30L alike, belong to one pool or the other; nothing else has a fleet.
    This has to agree with PACKCOLS: a pack with a column per fleet must be in here,
    or colKey() can never match the column it was typed into and the count is lost. */
@@ -3167,11 +3401,11 @@ const hasFleet=pack=>pack==="Keg"||pack==="30L Keg";
 function areaQty(e,a){ return e.counts?e.counts[a]:undefined; }
 function setAreaQty(st,e,a,val){
   const v=num(val);
-  e.counts=e.counts||{};
+  e.counts=e.counts||{}; e.at=e.at||{};
   if(v==null) delete e.counts[a]; else e.counts[a]=v;
-  const vals=COUNT_AREAS.map(x=>e.counts[x]).filter(x=>x!=null);
-  if(vals.length) e.qty=Math.round(sum(vals)*100)/100;
-  else { delete e.qty; delete e.counts; }
+  /* when this shed was last touched, so a merge knows which figure is newer */
+  e.at[a]=Date.now();
+  reTotal(e);
   stSave(st);
 }
 /* a line counted the old way, with one figure and no split */
@@ -3301,7 +3535,7 @@ function editEntry(st,e){
       field("Best before",el("input",{type:"date",id:"ebb",value:e.bestBefore||""})),
       field("Packaged on",el("input",{type:"date",id:"epd",value:e.packDate||""}),"Optional — used to show how much shelf life is left")));
     if(!isNew) b.append(el("button",{class:"btn danger",type:"button",style:"align-self:flex-start",
-      onclick:()=>{st.entries=st.entries.filter(x=>x.id!==e.id);persist("stocktakes",st);$("#dlg").close();render();}},"Delete line"));
+      onclick:()=>{forget(st,[e]);persist("stocktakes",st);$("#dlg").close();render();}},"Delete line"));
     syncPacks(b,e.pack);
   },body=>{
     const rec={id:e.id||uid("e"),productId:$("#ep",body).value,pack:$("#ek",body).value,
