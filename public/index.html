@@ -496,7 +496,7 @@ dialog footer{padding:12px 16px;border-top:1px solid var(--line-soft);display:fl
 /* Which build this is. It shows at the bottom of the sidebar and on Setup, so
    there is never any doubt about whether a deploy actually landed: if the
    stamp hasn't changed after deploying, the browser is still on the old file. */
-const BUILD="2026-11-09d · what every tank holds, week by week";
+const BUILD="2026-11-09e · brewed strong, watered back — the tank holds the base";
 /* ============================ helpers ============================ */
 const $ = (s,r)=> (r||document).querySelector(s);
 const el = (t,a,...k)=>{const n=document.createElement(t);
@@ -756,6 +756,7 @@ async function loadAll(){
   /* anything still queued on this device is newer than what came back */
   applyOutbox();
   mendDupeLines();
+  setBaseBrews();
   S.products.sort((a,b2)=>(a.sort|0)-(b2.sort|0));
   S.locations.sort((a,b2)=>(a.sort|0)-(b2.sort|0));
   S.stock.sort((a,b2)=>a.weekStart<b2.weekStart?1:-1);
@@ -3284,6 +3285,24 @@ function addPackCol(st){
     editPackCols(st);
   },"Add");
 }
+/* ---- one-time setup ----
+   The strengths Christen gave for the two lagers, written in once so the tank
+   figures are right from the first load. It only fills a beer that has nothing
+   set yet, so anything typed in the product screen afterwards stands. */
+const HIGH_GRAVITY=[
+  {id:"lager",       abv:4.2, brewAbv:5.0, base:"Lager"},
+  {id:"lager-middy", abv:3.5, brewAbv:5.0, base:"Lager"}];
+function setBaseBrews(){
+  let n=0;
+  for(const h of HIGH_GRAVITY){
+    const p=P(h.id);
+    if(!p||p.abv!=null||p.brewAbv!=null||p.base) continue;
+    p.abv=h.abv; p.brewAbv=h.brewAbv; p.base=h.base;
+    persist("products",p); n++;
+  }
+  if(n){ S.calcCache=null; console.log("set the base brew on "+n+" beers"); }
+  return n;
+}
 function addBatchRow(st,locId){
   openDialog("Add a batch",b=>{
     const prods=S.products.slice().sort((a,b2)=>a.name.localeCompare(b2.name));
@@ -3640,6 +3659,26 @@ function tankWeekVol(name,w){
   }
   return Math.round(v*10)/10;
 }
+/* Where a tank is holding one base brew that feeds more than one beer, say so
+   and say what each beer takes out of it — the whole point of the base is that
+   you cannot read it off the bars. */
+function baseHere(name,w){
+  const on=[];
+  for(const r of S.runs){
+    if(r.status==="cancelled"||!r.packDate) continue;
+    if(monday(brewStart(r))>w||monday(r.packDate)<w) continue;
+    const s=runTanks(r).find(x=>x.tank===name);
+    if(s) on.push({r,litres:s.litres||0});
+  }
+  if(on.length<2) return "";
+  const base=baseOf(on[0].r.productId);
+  if(!base||!on.every(x=>baseOf(x.r.productId)===base)) return "";
+  const t=tankOf(name), used=sum(on.map(x=>x.litres));
+  const lines=on.map(x=>"  "+(P(x.r.productId)||{}).name+" "+x.r.pack+" — "
+    +n0(x.litres)+" L of base → "+n0(finishedFrom(x.r.productId,x.r.pack,x.litres))+" L packaged");
+  return base+" base, feeding "+on.length+" beers:\n"+lines.join("\n")
+    +"\n  "+n0(used)+" L used"+(t&&t.cap?", "+n0(Math.max(0,t.cap-used))+" L of the tank spare":"");
+}
 /* what a tank is holding week by week, and where it is in trouble: more
    litres than it takes, or two different beers in it at once */
 function tankTrouble(name){
@@ -3652,9 +3691,12 @@ function tankTrouble(name){
     const on=rs.filter(r=>monday(brewStart(r))<=w&&monday(r.packDate)>=w);
     if(!on.length) continue;
     const vol=sum(on.map(r=>(runTanks(r).find(x=>x.tank===name)||{}).litres||0));
-    const brands=[...new Set(on.map(r=>r.productId))];
+    /* two beers off the ONE base brew are not two beers in the tank — it is
+       one tank of base that will be watered back into both */
+    const bases=[...new Set(on.map(r=>baseKey(r.productId)))];
     if(vol>t.cap+0.5) out.push({week:w,kind:"over",vol:Math.round(vol),cap:t.cap,runs:on.length});
-    else if(brands.length>1) out.push({week:w,kind:"mixed",brands,runs:on.length});
+    else if(bases.length>1) out.push({week:w,kind:"mixed",
+      brands:[...new Set(on.map(r=>r.productId))],runs:on.length});
   }
   return out.sort((a,b)=>a.week<b.week?-1:1);
 }
@@ -3748,10 +3790,12 @@ function tankTimeline(pane){
       const v=tankWeekVol(t.name,w);
       if(v>0){
         const full=t.cap>0?v/t.cap:0, over=v>t.cap+0.5;
+        const bs=baseHere(t.name,w);
         c.append(el("span",{class:"vol"+(over?" over":full>=0.95?" full":""),
           title:nq(v)+" L in "+t.name+", w/c "+fmtD(w)
             +(t.cap?" — "+Math.round(full*100)+"% of its "+n0(t.cap)+" L":"")
-            +(over?". More than it holds.":"")},n0(v)));
+            +(bs?"\n"+bs:"")
+            +(over?"\nMore than it holds.":"")},n0(v)));
       }
       l.append(c);
     });
@@ -4109,7 +4153,37 @@ function yieldOf(productId,pack){
 /* what comes out of the run, packaged */
 function litres(r){ return runUnits(r)*litresPerUnit(r.productId,r.pack); }
 /* and what has to go into the tank to get it, at this SKU's yield */
-function brewLitres(r){ return litres(r)/yieldOf(r.productId,r.pack); }
+/* ---- high gravity ----
+   The Lager and the Middy are one strong base brew, watered back at packaging.
+   So a tank holds LESS than will come out of it: 10,000 L of packaged 4.2%
+   is only 8,400 L of 5% base, and the same tank of base can fill both beers.
+   A beer with no brew strength set is brewed at the strength it is sold at,
+   and none of this touches it. */
+const abvOf=pid=>num((P(pid)||{}).abv);
+const brewAbvOf=pid=>num((P(pid)||{}).brewAbv);
+/* litres of base behind one litre of finished beer */
+function dilution(pid){
+  const a=abvOf(pid), b=brewAbvOf(pid);
+  /* no strengths, or a "base" weaker than the beer: nothing to water back */
+  if(a==null||b==null||a<=0||b<=0||b<=a) return 1;
+  return a/b;
+}
+const isHighGravity=pid=>dilution(pid)<1;
+/* beers off the same base brew can share a tank. A beer with no base named is
+   its own, so it still clashes with anything else in there. */
+const baseOf=pid=>String((P(pid)||{}).base||"").trim();
+const baseKey=pid=>baseOf(pid)||("\u0000"+pid);
+const sameBase=(a,b)=>baseKey(a)===baseKey(b);
+/* what has to be in the tank for this run: packaged litres, grossed up for
+   what is lost getting it out, then scaled back to base strength */
+function brewLitres(r){
+  return litres(r)/yieldOf(r.productId,r.pack)*dilution(r.productId);
+}
+/* the finished beer a given volume of base will make */
+function finishedFrom(pid,pack,baseLitres){
+  const d=dilution(pid); if(d<=0) return 0;
+  return baseLitres/d*yieldOf(pid,pack);
+}
 
 function newRun(sku,packDate,units,existing){
   const s=sku?{pid:sku.split("__")[0],pack:(skus().find(x=>x.id===sku)||{}).pack}:null;
@@ -4218,10 +4292,36 @@ function knownBatches(sku){
 function brewVolFrom(b){
   const pid=$("#rp",b).value, pack=$("#rk",b).value;
   const u=num($("#ra",b).value)!=null?num($("#ra",b).value):(num($("#ru",b).value)||0);
-  return u*litresPerUnit(pid,pack)/yieldOf(pid,pack);
+  return u*litresPerUnit(pid,pack)/yieldOf(pid,pack)*dilution(pid);
 }
 /* what this run is, in litres: what comes out packaged, what has to go in the
    tank to get it, and whether the tanks named add up to that */
+/* the product dialog's plain-English version of what the strengths mean */
+function abvNote(b){
+  const n=$("#pabv",b); if(!n) return; clear(n);
+  const a=num($("#pa",b).value), bv=num($("#pba",b).value);
+  const base=$("#pbase",b).value.trim();
+  if(a==null||bv==null||a<=0||bv<=0){
+    n.append("Leave the fermenter strength blank unless the beer is brewed strong and watered "
+      +"back. Without it, a tank holds exactly what it will package.");
+  } else if(bv<=a){
+    n.append(el("b",{style:"color:var(--warn)"},"The fermenter strength has to be the higher of "
+      +"the two — that is the point of brewing strong."));
+  } else {
+    const d=a/bv;
+    n.append(el("b",{},"Brewed at "+n1(bv)+"%, packaged at "+n1(a)+"%. "),
+      "Every 1,000 L packaged takes "+n0(1000*d)+" L of base, so a tank goes "
+      +Math.round((1-d)*100)+"% further.");
+  }
+  if(base){
+    const mates=S.products.filter(p=>String(p.base||"").trim()===base
+      &&p.id!==($("#pn",b)?slug($("#pn",b).value.trim()):""));
+    n.append(el("div",{class:"hint"},mates.length
+      ?("Shares the "+base+" base with "+mates.map(p=>p.name).join(", ")
+        +" — they can sit in one tank without being called a clash.")
+      :("The only beer on a "+base+" base so far.")));
+  }
+}
 function volNote(b){
   const n=$("#rvol",b); if(!n) return;
   const pid=$("#rp",b).value, pack=$("#rk",b).value;
@@ -4234,6 +4334,14 @@ function volNote(b){
   n.append(el("b",{},n0(packaged)+" L packaged"),
     " from "+n0(brew)+" L in tank, at "+Math.round(yieldOf(pid,pack)*100)+"% yield "
     +"("+n1(litresPerUnit(pid,pack))+" L per "+(PACK_UNIT[pack]||"unit").toLowerCase().replace(/s$/,"")+")");
+  if(isHighGravity(pid)){
+    /* spell the watering back out, so a tank figure smaller than the packaged
+       figure reads as arithmetic rather than a mistake */
+    n.append(el("div",{class:"hint"},
+      "Brewed at "+n1(brewAbvOf(pid))+"% and watered back to "+n1(abvOf(pid))+"%, so the tank "
+      +"holds "+n0(packaged/yieldOf(pid,pack))+" L \u00d7 "+n1(abvOf(pid))+"/"+n1(brewAbvOf(pid))
+      +" = "+n0(brew)+" L of "+(baseOf(pid)||"base")+" base."));
+  }
   if(rows.length&&inTanks>0){
     n.append(el("div",{class:"hint",style:short>1?"color:var(--warn)":short<-1?"color:var(--warn)":""},
       short>1?(n0(inTanks)+" L allocated — "+n0(short)+" L still has nowhere to go")
@@ -5347,6 +5455,19 @@ function editProduct(p){
                          ["noncore","Non-core — seasonals and one-offs"]],
         isNonCore(rec)?"noncore":"core",{id:"pr"}),"Which forecast screen it appears on"),
       el("div",{})));
+    /* high gravity: brewed strong, watered back at packaging */
+    b.append(el("div",{class:"fld"},"Strength"));
+    b.append(el("div",{class:"grid3"},
+      field("Packaged %",el("input",{type:"number",id:"pa",step:"0.1",min:"0",max:"20",
+        value:rec.abv!=null?rec.abv:"",placeholder:"4.2",oninput:()=>abvNote(b)}),
+        "What it says on the can"),
+      field("In the fermenter %",el("input",{type:"number",id:"pba",step:"0.1",min:"0",max:"20",
+        value:rec.brewAbv!=null?rec.brewAbv:"",placeholder:"leave blank unless it is watered back",
+        oninput:()=>abvNote(b)}),"Only if it is brewed strong and diluted"),
+      field("Base brew",el("input",{type:"text",id:"pbase",value:rec.base||"",
+        placeholder:"e.g. Lager",oninput:()=>abvNote(b)}),
+        "Beers off the same base can share a tank")));
+    b.append(el("div",{class:"note",id:"pabv"},"—"));
     b.append(el("div",{class:"row",style:"align-items:center;gap:10px"},
       el("span",{class:"fld",style:"margin:0"},"Brand colour"),
       el("input",{type:"color",class:"swin",id:"pc",value:brandColour(rec.id||"new")}),
@@ -5389,12 +5510,22 @@ function editProduct(p){
              ...S.products.filter(x=>x.forecast!==false).map(x=>[x.id,x.name])],"",{id:"pcopy"}),
         "Saves setting up every distributor again for a new beer"));
     }
+    abvNote(b);
   },body=>{
     const name=$("#pn",body).value.trim();
     if(!name){flash("Give the product a name");return false;}
     rec.name=name; rec.id=rec.id||slug(name);
     rec.brewToPackDays=num($("#pb",body).value)||21;
     rec.forecast=$("#pf",body).value==="yes";
+    /* checked before anything is written: returning false leaves the dialog
+       open, so a refused figure must not already be on the product */
+    const av=num($("#pa",body).value), bv=num($("#pba",body).value);
+    if(av!=null&&bv!=null&&av>0&&bv>0&&bv<av){
+      flash("The fermenter strength can't be weaker than the packaged strength"); return false; }
+    if(av!=null&&av>0) rec.abv=av; else delete rec.abv;
+    if(bv!=null&&bv>0) rec.brewAbv=bv; else delete rec.brewAbv;
+    const bs=$("#pbase",body).value.trim();
+    if(bs) rec.base=bs; else delete rec.base;
     if($("#pr",body).value==="noncore") rec.range="noncore"; else delete rec.range;
     rec.packs=PACKS.filter(c=>$("#pk-"+slug(c),body).checked).map(c=>({code:c,unitLabel:PACK_UNIT[c],
       shelfLifeMonths:num($("#sh-"+slug(c),body).value)||PACK_SHELF[c],
