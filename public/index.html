@@ -203,6 +203,18 @@ table.bsheet tbody tr:hover td{background:var(--surface-2)}
 .tname.bad b{color:var(--warn)}
 .tlane{position:relative;flex:1;min-height:30px}
 .tlane.loose{max-height:132px;overflow-y:auto;overflow-x:hidden}
+/* a lane that prints what the tank holds keeps a strip clear at the bottom for
+   it, and its bars stop short of that strip */
+.tlane.vol{min-height:46px}
+.tlane.vol .tbar{bottom:16px}
+.tday .vol{position:absolute;left:2px;right:3px;bottom:2px;text-align:right;
+  font:600 9px/1 var(--mono);color:var(--muted);letter-spacing:-.02em;
+  white-space:nowrap;overflow:hidden}
+.tday .vol.full{color:var(--accent-2)}
+.tday .vol.over{color:var(--crit)}
+.tname.vol{position:relative}
+.tname.vol .vhint{position:absolute;left:10px;bottom:2px;font:600 8px/1 var(--mono);
+  color:var(--faint);letter-spacing:.04em;text-transform:uppercase}
 .tday{position:absolute;top:0;bottom:0;border-right:1px solid var(--line-soft)}
 .tday.mon{border-right-color:var(--line);background:var(--sunk)}
 .trow.thead .tday{display:flex;align-items:center;padding-left:3px}
@@ -484,7 +496,7 @@ dialog footer{padding:12px 16px;border-top:1px solid var(--line-soft);display:fl
 /* Which build this is. It shows at the bottom of the sidebar and on Setup, so
    there is never any doubt about whether a deploy actually landed: if the
    stamp hasn't changed after deploying, the browser is still on the old file. */
-const BUILD="2026-11-09c · the sheds in colour, and the sheet’s pack types are yours to choose";
+const BUILD="2026-11-09d · what every tank holds, week by week";
 /* ============================ helpers ============================ */
 const $ = (s,r)=> (r||document).querySelector(s);
 const el = (t,a,...k)=>{const n=document.createElement(t);
@@ -3613,6 +3625,21 @@ function tankRuns(name,from,to){
     &&runTanks(r).some(x=>x.tank===name)
     &&monday(brewStart(r))<=to&&monday(r.packDate)>=from);
 }
+/* What one tank is holding in a given week, in litres. A brew counts from the
+   week it goes in to the week it is packaged, and a brew split across tanks
+   only brings the slice that is in THIS tank — so the figure is what is really
+   in there, not what the run adds up to. Same reckoning as tankTrouble(), so
+   the number on the board and the over-capacity warning always agree. */
+function tankWeekVol(name,w){
+  let v=0;
+  for(const r of S.runs){
+    if(r.status==="cancelled"||!r.packDate) continue;
+    if(monday(brewStart(r))>w||monday(r.packDate)<w) continue;
+    const s=runTanks(r).find(x=>x.tank===name);
+    if(s) v+=s.litres||0;
+  }
+  return Math.round(v*10)/10;
+}
 /* what a tank is holding week by week, and where it is in trouble: more
    litres than it takes, or two different beers in it at once */
 function tankTrouble(name){
@@ -3708,11 +3735,26 @@ function tankTimeline(pane){
   for(const t of list){
     const row=el("div",{class:"trow"});
     const bad=tankTrouble(t.name).filter(x=>wkIx[x.week]!=null);
-    row.append(el("div",{class:"tname"+(bad.length?" bad":"")},
-      el("b",{},t.name),el("span",{class:"hint"},n0(t.cap)+" L")));
-    const l=el("div",{class:"tlane","data-tank":t.name});
-    weeks.forEach((w,i)=>l.append(el("div",{class:"tday mon"+(w===S.config.currentWeek?" today":""),
-      style:"left:"+(i*WKW)+"px;width:"+WKW+"px"})));
+    row.append(el("div",{class:"tname vol"+(bad.length?" bad":"")},
+      el("b",{},t.name),el("span",{class:"hint"},n0(t.cap)+" L"),
+      el("span",{class:"vhint",title:"What this tank holds in each week, "
+        +"every brew in it added up"},"litres in tank")));
+    const l=el("div",{class:"tlane vol","data-tank":t.name});
+    /* under each week, what this tank actually holds that week — adding the
+       bars up by eye was the hard part */
+    weeks.forEach((w,i)=>{
+      const c=el("div",{class:"tday mon"+(w===S.config.currentWeek?" today":""),
+        style:"left:"+(i*WKW)+"px;width:"+WKW+"px"});
+      const v=tankWeekVol(t.name,w);
+      if(v>0){
+        const full=t.cap>0?v/t.cap:0, over=v>t.cap+0.5;
+        c.append(el("span",{class:"vol"+(over?" over":full>=0.95?" full":""),
+          title:nq(v)+" L in "+t.name+", w/c "+fmtD(w)
+            +(t.cap?" — "+Math.round(full*100)+"% of its "+n0(t.cap)+" L":"")
+            +(over?". More than it holds.":"")},n0(v)));
+      }
+      l.append(c);
+    });
     const mine=[];
     for(const r of S.runs){
       if(r.status==="cancelled"||!r.packDate) continue;
@@ -3763,7 +3805,8 @@ function layoutBars(l,items,weeks,wkIx,tank){
   if(ends.length>1){
     /* the unallocated lane can hold a hundred brews: cap it and let it scroll,
        rather than pushing every tank off the screen */
-    const want=ends.length*26+6, cap=l.classList.contains("loose")?132:want;
+    const strip=l.classList.contains("vol")?16:0;
+    const want=ends.length*26+6+strip, cap=l.classList.contains("loose")?132:want;
     l.style.minHeight=Math.min(want,cap)+"px";
     if(want>cap){ l.style.height=cap+"px";
       for(const d of l.querySelectorAll(".tday")) d.style.height=want+"px"; }
