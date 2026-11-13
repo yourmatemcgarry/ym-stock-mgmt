@@ -401,6 +401,12 @@ tbody tr:last-child td{border-bottom:0}
 .tl tr.sep td{background:var(--sunk);height:5px;padding:0}
 .tl tr.cap td.v{text-align:center;vertical-align:bottom;height:42px;position:relative}
 .tl tr.cap td.neg{background:var(--crit-soft)}
+/* the brewery-wide totals that sit above the beers */
+.tl tr.toprow td{background:var(--accent-soft);font-weight:600}
+.tl tr.toprow td.v{height:auto;padding-top:5px;padding-bottom:5px;color:var(--accent-ink)}
+.tl tr.toprow td.v.past{color:var(--muted);font-weight:400}
+.tl tr.toprow td.stick b{color:var(--accent-ink)}
+.tl tr.sep.top td{height:7px;background:var(--line)}
 .tl .capbar{height:26px;display:flex;align-items:flex-end;justify-content:center}
 .tl .capbar i{display:block;width:14px;border-radius:3px 3px 0 0;background:var(--accent);opacity:.75}
 .tl .capbar.over i{background:var(--crit);opacity:.9}
@@ -496,7 +502,7 @@ dialog footer{padding:12px 16px;border-top:1px solid var(--line-soft);display:fl
 /* Which build this is. It shows at the bottom of the sidebar and on Setup, so
    there is never any doubt about whether a deploy actually landed: if the
    stamp hasn't changed after deploying, the browser is still on the old file. */
-const BUILD="2026-11-09e · brewed strong, watered back — the tank holds the base";
+const BUILD="2026-11-13 · cartons and kegs for the week, up top";
 /* ============================ helpers ============================ */
 const $ = (s,r)=> (r||document).querySelector(s);
 const el = (t,a,...k)=>{const n=document.createElement(t);
@@ -3995,6 +4001,47 @@ function brandOutlook(pane,all){
   tb.append(el("thead",{},hr));
   const body=el("tbody");
   const brands=Object.values(byBrand).sort((a,b)=>(a.p.sort|0)-(b.p.sort|0));
+
+  /* ---- the line everybody reads first ----
+     Cartons and kegs for the whole brewery each week, so the packaging hall
+     knows what is coming without adding up every beer below. Cartons are cans
+     and ten-packs together, kegs are the 50s and the 30s together; the hover
+     splits each one back out. */
+  const PACK_GROUP={"Can":"cans","10 Pack":"cans","Keg":"kegs","30L Keg":"kegs"};
+  /* spelt out in the hover: "ctn" for both a carton of cans and a ten-pack
+     would hide the very split the hover is there to show */
+  const PART_LABEL={"Can":"cartons","10 Pack":"ten-packs",
+                    "Keg":"50L kegs","30L Keg":"30L kegs"};
+  const GROUPS=[{k:"cans",label:"Cans",unit:"cartons"},
+                {k:"kegs",label:"Kegs",unit:"kegs"}];
+  if(brands.length){
+    for(const g of GROUPS){
+      const tr=el("tr",{class:"cap toprow"});
+      tr.append(el("td",{class:"stick"},el("div",{class:"lbl"},
+        el("b",{},g.label),el("span",{class:"hint"},"to package"))));
+      weeks.forEach((w,i)=>{
+        /* every beer's packs of this kind, this week */
+        const parts={};
+        let tot=0;
+        for(const br of brands) for(const r of br.rows){
+          if(PACK_GROUP[r.s.pack]!==g.k) continue;
+          const v=r.packed[i]||0;
+          if(!v) continue;
+          tot+=v; parts[r.s.pack]=(parts[r.s.pack]||0)+v;
+        }
+        const td=el("td",{class:"v"+(tot>0?"":" past")});
+        if(tot>0){
+          td.textContent=nq(Math.round(tot*100)/100);
+          td.title=PACKS.filter(p=>parts[p])
+            .map(p=>nq(parts[p])+" "+(PART_LABEL[p]||p)).join(" + ")+"  ·  w/c "+fmtD(w);
+        } else td.textContent="·";
+        tr.append(td);
+      });
+      tr.append();
+      body.append(tr);
+    }
+    body.append(el("tr",{class:"sep top"},el("td",{colspan:String(weeks.length+1)})));
+  }
   for(const g of brands){
     const col=brandColour(g.p.id);
     /* the brand's week: every pack of it added up, in litres */
