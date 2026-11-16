@@ -237,6 +237,11 @@ table.bsheet tbody tr:hover td{background:var(--surface-2)}
 .tl.outlook td.v{text-align:right;font-family:var(--mono);font-size:11.5px;padding-right:6px}
 /* a stocktake line that disagrees with the ERP and hasn't been explained */
 input.cellinp.owes{background:var(--warn-soft);box-shadow:inset 0 0 0 1px var(--warn)}
+/* counted, but with no ERP figure to compare it against */
+td.num.owed{color:var(--warn);font-weight:600}
+/* a figure with no shed behind it: on the sheet, but clearly not a shed count */
+table.bsheet td.cell.ghost input.ghost{color:var(--warn);font-style:italic;
+  background:var(--warn-soft);box-shadow:inset 0 0 0 1px var(--warn)}
 input.cellinp.owes::placeholder{color:var(--warn);opacity:.9}
 td.cell.mid{text-align:center}
 input.rc{width:15px;height:15px;accent-color:var(--accent);cursor:pointer}
@@ -502,7 +507,7 @@ dialog footer{padding:12px 16px;border-top:1px solid var(--line-soft);display:fl
 /* Which build this is. It shows at the bottom of the sidebar and on Setup, so
    there is never any doubt about whether a deploy actually landed: if the
    stamp hasn't changed after deploying, the browser is still on the old file. */
-const BUILD="2026-11-13 · cartons and kegs for the week, up top";
+const BUILD="2026-11-16b · a cleared cell stays cleared, and no count hides off the sheet";
 /* ============================ helpers ============================ */
 const $ = (s,r)=> (r||document).querySelector(s);
 const el = (t,a,...k)=>{const n=document.createElement(t);
@@ -663,7 +668,13 @@ async function mergeStocktake(doc){
       const m=byCell.get(k);
       if(!m){ byCell.set(k,t); continue; }           /* somebody else's new cell */
       for(const a of COUNT_AREAS) foldShed(m,t,a);
-      if(m.qty==null&&!m.counts&&t.qty!=null) m.qty=t.qty;
+      /* A line counted before the sheds existed carries its single figure
+         across. A line that HAS shed history — counts, or a time stamp from
+         having been typed into — must not: when somebody clears a cell, mine
+         is deliberately empty and theirs still holds the old figure, and
+         taking it back put the count back as a bare qty with no sheds behind
+         it. That is invisible on the sheet and still lands in the summary. */
+      if(m.qty==null&&!splitAware(m)&&!t.counts&&t.qty!=null) m.qty=t.qty;
       if(m.erp==null&&t.erp!=null) m.erp=t.erp;
       if(!m.note&&t.note) m.note=t.note;
       if(!m.recheck&&t.recheck) m.recheck=true;
@@ -762,6 +773,7 @@ async function loadAll(){
   /* anything still queued on this device is newer than what came back */
   applyOutbox();
   mendDupeLines();
+  mendGhostCounts();
   setBaseBrews();
   S.products.sort((a,b2)=>(a.sort|0)-(b2.sort|0));
   S.locations.sort((a,b2)=>(a.sort|0)-(b2.sort|0));
@@ -3007,9 +3019,17 @@ function viewStocktake(pane,ctl){
       for(const shed of COUNT_AREAS) for(const pc of cols){
         const e=cellEntry(st,lid,r,pc,false);
         const v=e&&e.counts?e.counts[shed]:undefined;
-        tr.append(el("td",{class:"cell "+shedClass(shed)},el("input",{class:"cellinp num qty",type:"text",
-          inputmode:"decimal",value:v!=null?nq(v):"",placeholder:"·",
-          title:pc.label+" at "+shed+" — blank means nobody has been to it, 0 means none there",
+        /* A figure counted before the sheds were split has no shed of its own.
+           It is shown against the first shed, marked, rather than left off the
+           sheet — a quantity that counts in the summary must be on the page. */
+        const ghost=e&&unsplit(e)&&shed===COUNT_AREAS[0];
+        tr.append(el("td",{class:"cell "+shedClass(shed)+(ghost?" ghost":"")},
+          el("input",{class:"cellinp num qty"+(ghost?" ghost":""),type:"text",
+          inputmode:"decimal",value:v!=null?nq(v):(ghost?nq(e.qty):""),placeholder:"·",
+          title:ghost?(nq(e.qty)+" counted before this sheet split the sheds, so it is not "
+            +"against either one. Type the figure into the shed it is actually in and this "
+            +"goes away.")
+            :(pc.label+" at "+shed+" — blank means nobody has been to it, 0 means none there"),
           onfocus:ev=>ev.target.select(), onkeydown:ev=>stepCell(ev),
           onchange:ev=>{setAreaQty(st,cellEntry(st,lid,r,pc,true),shed,ev.target.value);
             reflow();}})));
@@ -3065,24 +3085,42 @@ function viewStocktake(pane,ctl){
   if(tot.length){
     const c=el("div",{class:"card"});
     const bad=tot.filter(x=>x.diff);
+    const gaps=tot.filter(x=>x.gap||x.erpOnly);
     c.append(el("header",{},el("h3",{},"Stock on hand"),
       el("span",{class:"chip"},tot.length+" SKUs"),
       bad.length?el("span",{class:"chip warn"},bad.length+" against the ERP"):null,
+      gaps.length?el("span",{class:"chip",title:"Counted with no ERP figure beside them, so "
+        +"they are not in the difference"},gaps.length+" not compared"):null,
       el("span",{style:"flex:1"}),
       el("span",{class:"hint"},"Every batch and both sheds added up")));
     const w=el("div",{class:"scroll tall"}), tb=el("table");
     tb.append(el("thead",{},el("tr",{},el("th",{},"SKU"),
-      el("th",{class:"num"},"On hand"),el("th",{class:"num"},"ERP"),el("th",{class:"num"},"Diff"),
+      el("th",{class:"num"},"On hand"),el("th",{class:"num"},"ERP"),
+      el("th",{class:"num",title:"Counted less the ERP, batch by batch, added up"},"Diff"),
+      el("th",{class:"num",title:"Counted with no ERP figure beside it, so it is in neither "
+        +"the difference nor the ERP total"},"Not compared"),
       el("th",{class:"num"},"Batches"),el("th",{},"Where it's out"))));
     const body=el("tbody");
     for(const x of tot){
       if(stBrand&&x.productId!==stBrand) continue;
       const off=offLines(st,x.id);
+      const gapTd=el("td",{class:"num"+(x.gap||x.erpOnly?" owed":"")});
+      if(x.gap||x.erpOnly){
+        gapTd.textContent=(x.gap?nq(x.gap):"")+(x.gap&&x.erpOnly?" / ":"")
+          +(x.erpOnly?"("+nq(x.erpOnly)+")":"");
+        gapTd.title=[x.gap?(nq(x.gap)+" counted with no ERP figure, on batch "
+                            +x.gapOn.join(", ")):null,
+                     x.erpOnly?(nq(x.erpOnly)+" in the ERP with nothing counted, on batch "
+                            +x.erpOnlyOn.join(", ")):null].filter(Boolean).join("\n")
+          +"\nNeither is counted as a difference — fill the missing figure in, or the batch "
+          +"is genuinely only on one side.";
+      } else gapTd.textContent="—";
       body.append(el("tr",{class:"stripe "+(off.length?"warn":"")},
         el("td",{},swatch(x.productId),el("b",{},x.label)),
         el("td",{class:"num"},el("b",{},nq(x.count))),
         el("td",{class:"num dim"},x.erp==null?"—":nq(x.erp)),
         el("td",{class:"num"+(x.diff?" neg":"")},x.diff?((x.diff>0?"+":"")+nq(x.diff)):"—"),
+        gapTd,
         el("td",{class:"num dim"},String(x.batches)),
         el("td",{class:"dim mono"},off.length?off.join(", "):"—")));
     }
@@ -3183,6 +3221,28 @@ function cellEntry(st,locId,row,pc,make){
    several invisible lines, and the sheet showed whichever happened to be first.
    This folds every cell back into one line. It runs on each load and is safe to
    run again: with nothing to mend it changes nothing and saves nothing. */
+/* ---- repair ----
+   A cell that was typed into and then cleared could come back from the server
+   as a bare quantity with no shed figures under it: nothing shows on the sheet,
+   but the figure still counts in the stock-on-hand summary. That is what made
+   Larry Keg read 10 out against the ERP on 16 Nov 26 with nothing to find on
+   any batch line. A quantity with no sheds AND a shed time stamp can only have
+   come from that, so it goes. A genuine pre-shed line has no time stamp and is
+   left exactly as it is. */
+function mendGhostCounts(){
+  let n=0;
+  for(const st of (S.stock||[])){
+    let hit=false;
+    for(const e of (st.entries||[])){
+      if(e.qty==null||e.counts) continue;
+      if(!(e.at&&Object.keys(e.at).length)) continue;   /* truly pre-shed: leave it */
+      delete e.qty; hit=true; n++;
+    }
+    if(hit) persist("stocktakes",st);
+  }
+  if(n){ S.calcCache=null; console.log("cleared "+n+" count(s) with no sheds behind them"); }
+  return n;
+}
 function mendDupeLines(){
   let mended=0;
   for(const st of (S.stock||[])){
@@ -3199,7 +3259,7 @@ function mendDupeLines(){
         first.counts=first.counts||{}; first.counts[a]=f;
         if(stampOf(e,a)){ first.at=first.at||{}; first.at[a]=stampOf(e,a); }
       }
-      if(first.qty==null&&!first.counts&&e.qty!=null) first.qty=e.qty;
+      if(first.qty==null&&!splitAware(first)&&!e.counts&&e.qty!=null) first.qty=e.qty;
       if(e.erp!=null) first.erp=e.erp;
       if(e.note) first.note=e.note;
       if(e.recheck) first.recheck=true;
@@ -3338,15 +3398,30 @@ function skuTotals(st){
     const id=skuId(e.productId,e.pack);
     if(!by.has(id)) by.set(id,{id,productId:e.productId,pack:e.pack,
       label:((P(e.productId)||{}).name||e.productId)+" "+e.pack,count:0,erp:null,diff:0,
+      gap:0,gapOn:[],erpOnly:0,erpOnlyOn:[],
       batches:0,seen:new Set()});
     const x=by.get(id);
     if(e.qty!=null) x.count+=e.qty;
     if(e.erp!=null) x.erp=(x.erp||0)+e.erp;
+    /* The difference is worked out cell by cell and added up, so the figure
+       here is the same one the batch lines show. Taking one total off the
+       other instead would charge every cell that was counted but never given
+       an ERP figure to the difference, and nobody could find it on the sheet:
+       a batch counted at 11 with the ERP column left blank came out as a
+       10-keg discrepancy that did not exist anywhere. Those cells are kept
+       apart and reported as what they are — not compared. */
+    const d=stDiff(e);
+    if(d!=null) x.diff+=d;
+    else if(e.qty!=null){ x.gap+=e.qty; x.gapOn.push(e.batch||"\u2014"); }
+    else if(e.erp!=null){ x.erpOnly+=e.erp; x.erpOnlyOn.push(e.batch||"\u2014"); }
     if(e.batch&&!x.seen.has(e.batch)){ x.seen.add(e.batch); x.batches++; }
   }
+  const r2=v=>Math.round(v*100)/100;
   for(const x of by.values()){
-    x.count=Math.round(x.count*100)/100;
-    if(x.erp!=null){ x.erp=Math.round(x.erp*100)/100; x.diff=Math.round((x.count-x.erp)*100)/100; }
+    x.count=r2(x.count); x.diff=r2(x.diff);
+    x.gap=r2(x.gap); x.erpOnly=r2(x.erpOnly);
+    x.gapOn=[...new Set(x.gapOn)]; x.erpOnlyOn=[...new Set(x.erpOnlyOn)];
+    if(x.erp!=null) x.erp=r2(x.erp);
   }
   return [...by.values()].sort((a,b)=>a.label.localeCompare(b.label));
 }
@@ -3447,6 +3522,10 @@ function setAreaQty(st,e,a,val){
 }
 /* a line counted the old way, with one figure and no split */
 const unsplit=e=>e.qty!=null&&!e.counts;
+/* has this line ever been counted shed by shed? A time stamp counts even
+   where the figure has since been cleared — that is what tells a deliberate
+   blank apart from a line that predates the sheds. */
+const splitAware=e=>!!(e.counts||(e.at&&Object.keys(e.at).length));
 /* inline grid entry: debounce writes so typing down a column is one save, not fifty */
 let stTimer=null, stPending=null;
 function stSave(st){
