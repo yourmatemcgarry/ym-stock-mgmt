@@ -12,6 +12,7 @@ import { getStore } from "@netlify/blobs";
 
 const COLLECTIONS = new Set([
   "config", "products", "locations", "history", "plan", "stocktakes", "runs",
+  "cans",
 ]);
 
 const json = (body, status = 200) =>
