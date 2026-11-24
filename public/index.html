@@ -412,6 +412,13 @@ tbody tr:last-child td{border-bottom:0}
 .tl tr.toprow td.v.past{color:var(--muted);font-weight:400}
 .tl tr.toprow td.stick b{color:var(--accent-ink)}
 .tl tr.sep.top td{height:7px;background:var(--line)}
+/* the can board */
+table.tl.cans td.v{text-align:right;font-family:var(--mono);font-size:11.5px;padding-right:7px}
+table.tl.cans td.v.lands{color:var(--ok);font-weight:600}
+table.tl.cans td.v.neg{color:var(--crit);font-weight:700;background:var(--crit-soft)}
+table.tl.cans td.v.tot{font-weight:600}
+table.tl.cans tr.totalrow td{border-top:2px solid var(--line);background:var(--surface-2)}
+table.tl.cans td.v.past{color:var(--faint)}
 .tl .capbar{height:26px;display:flex;align-items:flex-end;justify-content:center}
 .tl .capbar i{display:block;width:14px;border-radius:3px 3px 0 0;background:var(--accent);opacity:.75}
 .tl .capbar.over i{background:var(--crit);opacity:.9}
@@ -507,7 +514,7 @@ dialog footer{padding:12px 16px;border-top:1px solid var(--line-soft);display:fl
 /* Which build this is. It shows at the bottom of the sidebar and on Setup, so
    there is never any doubt about whether a deploy actually landed: if the
    stamp hasn't changed after deploying, the browser is still on the old file. */
-const BUILD="2026-11-16b · a cleared cell stays cleared, and no count hides off the sheet";
+const BUILD="2026-11-24 · cans, and a refused change can no longer block the queue";
 /* ============================ helpers ============================ */
 const $ = (s,r)=> (r||document).querySelector(s);
 const el = (t,a,...k)=>{const n=document.createElement(t);
@@ -578,7 +585,7 @@ const S={
   ready:false, backend:null, mode:"loading",
   config:{currentWeek:thisMonday(),horizon:26,past:6,avgWindow:8,
           defaultDrawBasis:"prior_year",defaultShipMethod:"target_soh",coverWarnWeeks:2},
-  products:[], locations:[], hist:{}, plan:{}, stock:[], runs:[],
+  products:[], locations:[], hist:{}, plan:{}, stock:[], runs:[], cans:[],
   view:"forecast", open:{}, packTab:"all", prodTab:"all", dirty:new Set(), calcCache:null
 };
 const P=id=>S.products.find(p=>p.id===id);
@@ -622,6 +629,10 @@ function outQueue(op,kind,id,doc){
 }
 function syncChip(){
   if(!S.backend){ setSync("off","This device only"); return; }
+  if(parked.length){
+    setSync("warn",parked.length+" change"+(parked.length===1?"":"s")+" the server refused");
+    return;
+  }
   if(outbox.length){
     setSync("warn",outbox.length+" change"+(outbox.length===1?"":"s")+" waiting to save");
   } else setSync("on",S.backend.label);
@@ -718,6 +729,20 @@ async function stocktakeLost(doc){
     return false;
   }catch(err){ return false; }   /* no signal: the queue keeps it for later */
 }
+/* A change the server refuses outright — an unknown collection on an older
+   deployment, say — would otherwise sit at the head of the queue and be
+   retried forever, and everything typed after it would queue up behind and
+   never save. Those are set aside here instead, kept on the device so nothing
+   is thrown away, and reported. */
+const PARKED="coldroom-parked-v1";
+let parked=[];
+function parkLoad(){ try{ parked=JSON.parse(localStorage.getItem(PARKED)||"[]")||[]; }catch(e){ parked=[]; } }
+function parkSave(){ try{ localStorage.setItem(PARKED,JSON.stringify(parked)); }catch(e){} }
+/* 4xx means the server will say the same thing next time; 408 and 429 are
+   "try again in a moment", and anything 5xx or a dropped connection is worth
+   keeping in the queue. */
+const hopeless=e=>e&&e.status>=400&&e.status<500&&e.status!==401
+  &&e.status!==408&&e.status!==429;
 let flushing=false;
 async function flushOutbox(){
   if(flushing||!S.backend||!outbox.length) return;
@@ -725,9 +750,21 @@ async function flushOutbox(){
   try{
     while(outbox.length){
       const x=outbox[0];
-      if(x.op==="del") await S.backend.del(x.kind,x.id);
-      else if(x.kind==="stocktakes") await saveStocktake(x.doc);
-      else await S.backend.set(x.kind,x.doc);
+      try{
+        if(x.op==="del") await S.backend.del(x.kind,x.id);
+        else if(x.kind==="stocktakes") await saveStocktake(x.doc);
+        else await S.backend.set(x.kind,x.doc);
+      }catch(e){
+        if(e&&e.auth){ flash("Your passphrase was rejected — reload to sign in again"); break; }
+        if(!hopeless(e)) break;              /* keep it, try again later */
+        const i=outbox.indexOf(x);
+        if(i>=0) outbox.splice(i,1);
+        parked.push(Object.assign({},x,{status:e.status,at:Date.now()}));
+        parkSave(); outSave(); syncChip();
+        flash("The server wouldn't take a "+x.kind+" change ("+e.status
+          +"). It's been set aside and everything else is still saving.");
+        continue;
+      }
       /* drop the exact item that went up. If a newer version of the same
          document was queued while this one was in flight, that newer one is a
          different object and stays in the queue to be sent next — shifting
@@ -737,7 +774,6 @@ async function flushOutbox(){
       outSave(); syncChip();
     }
   }catch(e){
-    if(e&&e.auth) flash("Your passphrase was rejected — reload to sign in again");
     syncChip();
   }finally{ flushing=false; }
 }
@@ -761,7 +797,7 @@ function flash(msg){let t=$(".toast");if(!t){t=el("div",{class:"toast"});documen
 
 async function loadAll(){
   const b=S.backend; if(!b) return;
-  const [cfg,pr,lo,hi,pl,st,ru]=await Promise.all(
+  const [cfg,pr,lo,hi,pl,st,ru,cn]=await Promise.all(
     KINDS.map(n=>b.list(n).catch(()=>[])));
   if(cfg&&cfg[0]) Object.assign(S.config,cfg[0]);
   if(pr&&pr.length) S.products=pr;
@@ -770,6 +806,7 @@ async function loadAll(){
   if(pl&&pl.length) pl.forEach(p=>S.plan[p.id]=p);
   if(st&&st.length) S.stock=st;
   if(ru&&ru.length) S.runs=ru;
+  if(cn&&cn.length) S.cans=cn;
   /* anything still queued on this device is newer than what came back */
   applyOutbox();
   mendDupeLines();
@@ -794,6 +831,7 @@ function applyOutbox(){
     if(x.op==="del"){
       if(x.kind==="stocktakes") S.stock=S.stock.filter(d=>d.id!==x.id);
       if(x.kind==="runs") S.runs=S.runs.filter(d=>d.id!==x.id);
+      if(x.kind==="cans") S.cans=S.cans.filter(d=>d.id!==x.id);
       if(x.kind==="products") S.products=S.products.filter(d=>d.id!==x.id);
       if(x.kind==="locations") S.locations=S.locations.filter(d=>d.id!==x.id);
       continue;
@@ -805,6 +843,7 @@ function applyOutbox(){
     else if(x.kind==="products") S.products=upsert(S.products,d);
     else if(x.kind==="locations") S.locations=upsert(S.locations,d);
     else if(x.kind==="runs") S.runs=upsert(S.runs,d);
+    else if(x.kind==="cans") S.cans=upsert(S.cans,d);
     else if(x.kind==="stocktakes") S.stock=upsert(S.stock,d);
   }
   if(outbox.length) S.calcCache=null;
@@ -819,6 +858,7 @@ async function boot(){
   if("serviceWorker" in navigator)
     navigator.serviceWorker.register("/sw.js").catch(()=>{});
   outLoad();
+  parkLoad();
   localLoad();
   let b=null;
   try{ b=await openBackend(); }catch(e){}
@@ -1149,7 +1189,7 @@ function histLoc(sku,field,locId){
    runtime supplies a shared database, and on Netlify, where a small function
    over Netlify Blobs does the same job. Both expose list/set/del. */
 
-const KINDS=["config","products","locations","history","plan","stocktakes","runs"];
+const KINDS=["config","products","locations","history","plan","stocktakes","runs","cans"];
 const KEYSTORE="coldroom-key";
 
 function artifactBackend(db){
@@ -1171,7 +1211,7 @@ function restBackend(){
   async function call(path,opts){
     const r=await fetch("/api/db/"+path,Object.assign({headers:head()},opts||{}));
     if(r.status===401){ const e=new Error("passphrase"); e.auth=true; throw e; }
-    if(!r.ok) throw new Error("Server said "+r.status);
+    if(!r.ok){ const e=new Error("Server said "+r.status); e.status=r.status; throw e; }
     return r.json();
   }
   return {
@@ -1739,6 +1779,7 @@ const ICONS={months:'<path d="M4 5h16v15H4zM4 10h16M9 5v15M15 5v15" stroke="curr
  forecast:'<path d="M3 3v18h18"/><path d="M7 14l4-5 3 3 5-7"/>',
  stocktake:'<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M9 8h6M9 12h6M9 16h3"/>',
  production:'<path d="M4 20V9l5 3V9l5 3V4l6 3v13z"/>',
+ cans:'<path d="M8 4h8l-1 3v12a2 2 0 0 1-2 2h-2a2 2 0 0 1-2-2V7z"/><path d="M7 7h10M7 19h10"/>',
  ageing:'<circle cx="12" cy="12" r="8"/><path d="M12 7v5l3 2"/>',
  review:'<path d="M4 19V5"/><path d="M4 19h16"/><path d="M8 15l4-6 3 3 4-6"/>',
  noncore:'<path d="M12 3l2.4 5.3 5.6.6-4.2 3.9 1.2 5.6L12 15.6 6.9 18.4l1.2-5.6L4 8.9l5.6-.6z"/>',
@@ -1748,6 +1789,8 @@ const VIEWS=[
  {id:"noncore",label:"Non-core",title:"Non-core range",sub:"Seasonals, one-offs and anything that isn't part of the core range"},
  {id:"stocktake",label:"Stocktake",title:"Weekly stocktake",sub:"Batch-level counts by location — the numbers everything else runs on"},
  {id:"production",label:"Production",title:"Production schedule",sub:"Planned packaging runs and the brew dates they imply"},
+ {id:"cans",label:"Cans",title:"Cans",
+  sub:"What the packaging schedule takes, what is on hand here and at the supplier, and when the print runs land"},
  {id:"ageing",label:"Aged stock",title:"Aged stock",sub:"Best before, send-by cut-offs and what needs moving"},
  {id:"months",label:"By month",title:"The year by month",
   sub:"Volume out, month by month and brand by brand, against last year"},
@@ -1767,6 +1810,10 @@ function drawNav(){
       if(n) b.append(el("span",{class:"ct"},String(n)));
     }
     if(v.id==="ageing"&&aged) b.append(el("span",{class:"ct"},String(aged)));
+    if(v.id==="cans"){
+      const n2=S.ready?cansRunningOut().length:0;
+      if(n2) b.append(el("span",{class:"ct"},String(n2)));
+    }
     n.append(b);
   }
 }
@@ -1861,7 +1908,7 @@ function render(){
   if(S.seedUpdate) pane.append(seedBanner());
   try{
     ({forecast:viewForecast,noncore:viewForecast,stocktake:viewStocktake,
-      production:viewProduction,ageing:viewAgeing,review:viewReview,
+      production:viewProduction,cans:viewCans,ageing:viewAgeing,review:viewReview,
       months:viewMonths,
       setup:viewSetup}[S.view])(pane,ctl,v);
   }catch(e){
@@ -4044,6 +4091,344 @@ function tankDrag(ev,r,fromTank,slice){
   ev.preventDefault();
 }
 
+/* ================= cans ==================
+   One printed can design per beer. Cartons and ten-packs of that beer both
+   come off it — a carton is 24 cans, a ten-pack 10, worked out from the pack's
+   litres and the can's size rather than typed twice.
+
+   Stock sits in two places: ours at Warana and the supplier's holding. Each
+   week's packaging takes from ours first and falls back on theirs, so the line
+   that matters is the two together. A print run lands in a week and tops one
+   of them up; it keeps its date as the board scrolls, and the order-by week is
+   simply the landing week less the lead time. */
+let canWeeks=26, canFrom=null, canOpen={};
+const CANDEFAULT={size:0.375, leadWeeks:6, moq:0};
+function canDesigns(){
+  /* a design for every beer that has a can pack, whether or not it has been
+     set up yet — a beer you package is a beer whose cans can run out */
+  const out=[];
+  for(const p of S.products){
+    if(!(p.packs||[]).some(q=>CAN_PACKS.includes(q.code))) continue;
+    const saved=(S.cans||[]).find(c=>c.id===p.id)||{};
+    out.push(Object.assign({}, CANDEFAULT, saved,
+      {id:p.id, productId:p.id, name:saved.name||(p.name+" "+Math.round((saved.size||CANDEFAULT.size)*1000)+"ml")}));
+  }
+  return out.sort((a,b)=>((P(a.id)||{}).sort|0)-((P(b.id)||{}).sort|0));
+}
+const CAN_PACKS=["Can","10 Pack"];
+const canOf=id=>canDesigns().find(c=>c.id===id)||null;
+function canSave(c){
+  const keep=Object.assign({},c); delete keep.productId;
+  S.cans=upsert(S.cans||[],keep); persist("cans",keep);
+}
+/* how many cans one carton of this pack swallows */
+function cansPer(pid,pack,size){
+  const sz=num(size)||CANDEFAULT.size;
+  const v=litresPerUnit(pid,pack)/sz;
+  return sz>0&&isFinite(v)?Math.round(v):0;
+}
+/* every can-packed SKU of this beer, and what one carton takes */
+function canSkus(c){
+  return skus().filter(s=>s.product.id===c.productId&&CAN_PACKS.includes(s.pack))
+    .map(s=>({sku:s, per:cansPer(c.productId,s.pack,c.size)}));
+}
+/* the print runs for one design, soonest first */
+const canRuns=c=>(c.runs||[]).slice()
+  .sort((a,b)=>String(a.land||"").localeCompare(String(b.land||"")));
+/* ---- the week by week run-down ----
+   Returns a row per week: what packaging takes, and what is left in each
+   place after it. Ours goes first; when ours cannot cover a week the rest
+   comes off the supplier's holding, and anything still uncovered is a
+   shortfall, reported rather than hidden as a negative. */
+function canPlan(c,weeks,all){
+  /* Always run from the week the stock was counted, whatever the board is
+     showing. Starting the sum at the first visible week would hand the window
+     the raw on-hand figures again and lose every print run and every week of
+     packaging before it — scroll forward and the cans came back. */
+  const from=monday(c.asOf||S.config.currentWeek);
+  const last=weeks[weeks.length-1];
+  const span=[];
+  for(let w=from; w<=last && span.length<520; w=wkAdd(w,1)) span.push(w);
+  let ym=num(c.onHand)||0, sup=num(c.atSupplier)||0;
+  const skusOf=canSkus(c), runs=canRuns(c);
+  const byWeek={};
+  for(const w of span){
+    /* what lands this week, before anything is drawn */
+    let inYm=0, inSup=0;
+    for(const r of runs){
+      if(monday(r.land||"")!==w) continue;
+      const q=num(r.qty)||0;
+      if(r.to==="supplier") inSup+=q; else inYm+=q;
+    }
+    ym+=inYm; sup+=inSup;
+    let used=0;
+    for(const x of skusOf){
+      const cc=all[x.sku.id]; if(!cc) continue;
+      used+=(i2(cc,w,"in")||0)*x.per;
+    }
+    let short=0;
+    const fromYm=Math.min(ym,used);
+    ym-=fromYm;
+    let need=used-fromYm;
+    if(need>0){ const fromSup=Math.min(sup,need); sup-=fromSup; need-=fromSup; }
+    if(need>0) short=need;
+    byWeek[w]={week:w, used, inYm, inSup, ym, sup, short,
+               total:Math.round((ym+sup)*100)/100};
+  }
+  /* a week before the count has no figures: nobody knows what was there */
+  return weeks.map(w=>byWeek[w]||{week:w, before:true, used:0, inYm:0, inSup:0,
+                                  ym:null, sup:null, short:0, total:null});
+}
+/* the designs that run dry inside the window the board is showing */
+function cansRunningOut(){
+  const start=canFrom||S.config.currentWeek;
+  const weeks=[]; for(let i=0;i<canWeeks;i++) weeks.push(wkAdd(start,i));
+  const all=computeAll(), out=[];
+  for(const c of canDesigns()){
+    if(!(S.cans||[]).some(x=>x.id===c.id)) continue;
+    if(canPlan(c,weeks,all).some(r=>r.short>0)) out.push(c);
+  }
+  return out;
+}
+/* the first week it runs out, and the week an order has to be placed to beat it */
+function canTrouble(c,rows){
+  const dry=rows.find(r=>r.short>0);
+  const out={dry:dry||null, orderBy:null, late:[]};
+  for(const r of canRuns(c)){
+    if(!r.land) continue;
+    const by=wkAdd(monday(r.land),-(num(c.leadWeeks)||0));
+    if(!r.order&&by<S.config.currentWeek) out.late.push({run:r,by});
+  }
+  if(dry){
+    /* to cover the dry week the cans have to land that week at the latest */
+    out.orderBy=wkAdd(dry.week,-(num(c.leadWeeks)||0));
+  }
+  return out;
+}
+function viewCans(pane,ctl){
+  const start=canFrom||S.config.currentWeek;
+  const weeks=[]; for(let i=0;i<canWeeks;i++) weeks.push(wkAdd(start,i));
+  const all=computeAll();
+  const designs=canDesigns();
+
+  ctl.append(el("button",{class:"btn sm",onclick:()=>{canFrom=wkAdd(start,-8);render();}},"◀"),
+    el("button",{class:"btn sm",onclick:()=>{canFrom=null;render();}},"Today"),
+    el("button",{class:"btn sm",onclick:()=>{canFrom=wkAdd(start,8);render();}},"▶"),
+    sel([[13,"13 weeks"],[26,"26 weeks"],[39,"39 weeks"],[52,"52 weeks"]],canWeeks,
+      {onchange:e=>{canWeeks=+e.target.value;render();}}));
+
+  if(!designs.length){
+    pane.append(el("div",{class:"card"},el("div",{class:"empty"},el("b",{},"No canned beers"),
+      "A beer needs a Can or 10 Pack in Setup before its cans can be tracked.")));
+    return;
+  }
+
+  const isSet=c=>(S.cans||[]).some(x=>x.id===c.id);
+  const plans=designs.map(c=>({c,rows:canPlan(c,weeks,all),set:isSet(c)}));
+  for(const x of plans) x.bad=canTrouble(x.c,x.rows);
+
+  /* A beer whose stock has never been entered is not "running out" — it is
+     unknown. Warning about it would bury the beers that really are short. */
+  const dry=plans.filter(x=>x.set&&x.bad.dry)
+    .sort((a,b)=>a.bad.dry.week<b.bad.dry.week?-1:1);
+  const t=el("div",{class:"tiles"});
+  t.append(tile("Can designs",String(designs.length),
+    designs.filter(c=>!(S.cans||[]).some(x=>x.id===c.id)).length
+      ? designs.filter(c=>!(S.cans||[]).some(x=>x.id===c.id)).length+" not set up yet"
+      : "all set up"));
+  t.append(tile("Running out",String(dry.length),
+    dry.length?("first "+((P(dry[0].c.id)||{}).name||dry[0].c.id)+", w/c "+fmtD(dry[0].bad.dry.week))
+              :"covered for "+canWeeks+" weeks", dry.length?"alert":"good"));
+  const landing=plans.reduce((a,x)=>a+canRuns(x.c)
+    .filter(r=>monday(r.land||"")>=S.config.currentWeek).length,0);
+  t.append(tile("Print runs booked",String(landing),
+    landing?"ahead of us":"nothing on order"));
+  t.append(tile("Cans to be used",n0(sum(plans.map(x=>sum(x.rows.map(r=>r.used))))),
+    "over "+canWeeks+" weeks"));
+  pane.append(t);
+
+  if(dry.length){
+    const n=el("div",{class:"note",style:"border-color:var(--crit)"});
+    n.append(el("b",{},"Cans run out. "));
+    n.append(dry.map(x=>((P(x.c.id)||{}).name||x.c.id)+" w/c "+fmtD(x.bad.dry.week)
+      +" (short "+n0(x.bad.dry.short)+(x.c.leadWeeks?", order by "+fmtD(x.bad.orderBy):"")+")")
+      .join("; ")+".");
+    pane.append(n);
+  }
+  const late=plans.filter(x=>x.set&&x.bad.late.length);
+  if(late.length){
+    const n=el("div",{class:"note",style:"border-color:var(--warn)"});
+    n.append(el("b",{},"Past the order-by date. "));
+    n.append(late.map(x=>((P(x.c.id)||{}).name||x.c.id)+" — the run landing "
+      +fmtD(x.bad.late[0].run.land)+" needed ordering by "+fmtD(x.bad.late[0].by))
+      .join("; ")+". Mark it ordered once it has gone in.");
+    pane.append(n);
+  }
+
+  for(const {c,rows,bad,set} of plans){
+    const card=el("div",{class:"card"});
+    const saved=(S.cans||[]).find(x=>x.id===c.id);
+    card.append(el("header",{},swatch(c.productId),el("h3",{},(P(c.id)||{}).name||c.id),
+      el("span",{class:"chip"},Math.round(c.size*1000)+"ml"),
+      el("span",{class:"chip"+(set&&bad.dry?" warn":"")},
+        !set?"not set up":bad.dry?("out w/c "+fmtD(bad.dry.week)):"covered"),
+      el("span",{style:"flex:1"}),
+      el("span",{class:"hint"},canSkus(c).map(x=>x.sku.pack+" ×"+x.per).join("  ·  ")),
+      el("button",{class:"btn sm",onclick:()=>editCanStock(c)},saved?"Stock & lead time":"Set up"),
+      el("button",{class:"btn sm pri",onclick:()=>editPrintRun(c,null)},"Print run")));
+
+    if(!saved){
+      card.append(el("div",{class:"empty"},el("b",{},"Not set up"),
+        "Put in what is on hand here and at the supplier, and the weeks below will run it down."));
+      pane.append(card); continue;
+    }
+
+    const w=el("div",{class:"scroll"}), tb=el("table",{class:"tl cans",
+      style:"width:"+(230+weeks.length*54)+"px"});
+    const hr=el("tr",{},el("th",{class:"stick"},"Week commencing"));
+    weeks.forEach((wk,i)=>{
+      const th=el("th",{class:"wkh"+(wk===S.config.currentWeek?" now":"")},el("b",{},fmtW(wk)));
+      th.title=wk; hr.append(th);
+    });
+    tb.append(el("thead",{},hr));
+    const body=el("tbody");
+    const line=(label,hint,pick,cls)=>{
+      const tr=el("tr",{class:cls||""});
+      tr.append(el("td",{class:"stick"},el("div",{class:"lbl"},
+        el("b",{},label),hint?el("span",{class:"hint"},hint):null)));
+      rows.forEach(r=>{
+        const v=pick(r);
+        const td=el("td",{class:"v"+(v.cls?" "+v.cls:"")});
+        td.textContent=v.txt;
+        if(v.title) td.title=v.title;
+        tr.append(td);
+      });
+      body.append(tr);
+    };
+    line("Used","packaging",r=>({txt:r.used?n0(r.used):"·",
+      cls:r.used?"":"past",
+      title:r.used?(n0(r.used)+" cans into packaging, w/c "+fmtD(r.week)):""}));
+    line("Lands","print runs",r=>{
+      const n=r.inYm+r.inSup;
+      return {txt:n?("+"+n0(n)):"·", cls:n?"lands":"past",
+        title:n?[r.inYm?n0(r.inYm)+" to Warana":null,
+                 r.inSup?n0(r.inSup)+" to the supplier":null].filter(Boolean).join(", "):""};
+    });
+    const BEFORE={txt:"·",cls:"past",title:"Before the stock was counted"};
+    line("At Your Mates","",r=>r.before?BEFORE:({txt:n0(r.ym),cls:r.ym<=0?"neg":""}));
+    line("At the supplier","",r=>r.before?BEFORE:({txt:n0(r.sup),cls:r.sup<=0?"dim":""}));
+    line("Total available","both together",r=>r.before?BEFORE:({
+      txt:r.short?("−"+n0(r.short)):n0(r.total),
+      cls:r.short?"neg":"tot",
+      title:r.short?("Short "+n0(r.short)+" cans this week"):""}),"totalrow");
+    tb.append(body); w.append(tb); card.append(w);
+
+    const runs=canRuns(c);
+    const rl=el("div",{class:"note"});
+    rl.append(el("b",{},"Print runs. "));
+    if(!runs.length) rl.append("None booked. ");
+    else rl.append(runs.map(r=>n0(num(r.qty)||0)+" landing "+fmtD(r.land)
+      +(r.order?" (ordered "+fmtD(r.order)+")":
+        c.leadWeeks?" (order by "+fmtD(wkAdd(monday(r.land),-c.leadWeeks))+")":""))
+      .join("; ")+". ");
+    rl.append("Lead time "+(c.leadWeeks||0)+" week"+(c.leadWeeks===1?"":"s")
+      +(num(c.moq)?", minimum order "+n0(c.moq):"")+".");
+    if(runs.length){
+      const edit=el("div",{class:"row",style:"gap:6px;margin-top:8px"});
+      for(const r of runs) edit.append(el("button",{class:"btn sm",
+        onclick:()=>editPrintRun(c,r)},n0(num(r.qty)||0)+" · "+fmtD(r.land)));
+      rl.append(edit);
+    }
+    card.append(rl);
+    pane.append(card);
+  }
+}
+/* what is on hand, and how long the printer takes */
+function editCanStock(c){
+  openDialog("Cans — "+((P(c.id)||{}).name||c.id),b=>{
+    b.append(el("div",{class:"grid3"},
+      field("Can size",el("input",{type:"number",id:"csz",step:"0.005",min:"0.1",
+        value:c.size}),"Litres — 0.375 for a standard can"),
+      field("On hand at Your Mates",el("input",{type:"number",id:"cym",step:"1",min:"0",
+        value:c.onHand!=null?c.onHand:""}),"Cans, at the start of this week"),
+      field("On hand at the supplier",el("input",{type:"number",id:"csu",step:"1",min:"0",
+        value:c.atSupplier!=null?c.atSupplier:""}),"Their holding for us")));
+    b.append(el("div",{class:"grid2"},
+      field("Lead time",el("input",{type:"number",id:"clt",step:"1",min:"0",
+        value:c.leadWeeks!=null?c.leadWeeks:6}),"Weeks from order to landing"),
+      field("Minimum order",el("input",{type:"number",id:"cmo",step:"1000",min:"0",
+        value:c.moq||""}),"Cans — leave blank if there isn't one")));
+    const per=canSkus(c).map(x=>x.sku.pack+" takes "+x.per+" cans").join(", ");
+    b.append(el("div",{class:"note"},"Worked out from the pack sizes: ",el("b",{},per||"—"),
+      ". The figures above are read as this week's opening stock; every week after "
+      +"runs down from them using the packaging schedule."));
+  },body=>{
+    const rec=Object.assign({},(S.cans||[]).find(x=>x.id===c.id)||{id:c.id},{
+      size:num($("#csz",body).value)||CANDEFAULT.size,
+      onHand:num($("#cym",body).value)||0,
+      atSupplier:num($("#csu",body).value)||0,
+      leadWeeks:num($("#clt",body).value)||0,
+      moq:num($("#cmo",body).value)||0,
+      asOf:S.config.currentWeek});
+    rec.runs=((S.cans||[]).find(x=>x.id===c.id)||{}).runs||[];
+    canSave(rec);
+    flash(((P(c.id)||{}).name||c.id)+" cans saved");
+  });
+}
+/* a print run: a quantity landing in a week, and it stays on that week */
+function editPrintRun(c,r){
+  const isNew=!r;
+  openDialog((isNew?"Book":"Edit")+" a print run — "+((P(c.id)||{}).name||c.id),b=>{
+    b.append(el("div",{class:"grid3"},
+      field("Cans",el("input",{type:"number",id:"prq",step:"1000",min:"0",
+        value:r?r.qty:"",placeholder:"200000"})),
+      field("Lands",el("input",{type:"date",id:"prl",value:r?r.land:""}),
+        "The week it arrives"),
+      field("Lands at",sel([["ym","Your Mates"],["supplier","The supplier"]],
+        r&&r.to==="supplier"?"supplier":"ym",{id:"prt"}))));
+    b.append(el("div",{class:"grid2"},
+      field("Ordered",el("input",{type:"date",id:"pro",value:r&&r.order?r.order:""}),
+        "Leave blank until it has gone in"),
+      field("Note",el("input",{type:"text",id:"prn",value:r&&r.note?r.note:"",
+        placeholder:"PO number, pallet count"}))));
+    const hint=el("div",{class:"note",id:"prhint"},"—");
+    b.append(hint);
+    const upd=()=>{
+      const land=$("#prl",b).value;
+      clear(hint);
+      if(!land){ hint.append("Pick the week it lands and this will say when it has to be ordered."); return; }
+      const by=wkAdd(monday(land),-(num(c.leadWeeks)||0));
+      hint.append(el("b",{},"Lands w/c "+fmtW(monday(land))+". "),
+        "At a "+(c.leadWeeks||0)+"-week lead time it has to be ordered by "+fmtD(by)+
+        (by<S.config.currentWeek?" — which has passed.":"."));
+      const q=num($("#prq",b).value)||0;
+      if(num(c.moq)&&q&&q<c.moq) hint.append(el("div",{class:"hint",style:"color:var(--warn)"},
+        "Under the "+n0(c.moq)+" minimum order."));
+    };
+    $("#prl",b).addEventListener("change",upd);
+    $("#prq",b).addEventListener("input",upd);
+    upd();
+    if(!isNew) b.append(el("button",{class:"btn danger",type:"button",style:"align-self:flex-start",
+      onclick:()=>{
+        const rec=Object.assign({},(S.cans||[]).find(x=>x.id===c.id)||{id:c.id});
+        rec.runs=(rec.runs||[]).filter(x=>x.id!==r.id);
+        canSave(rec); $("#dlg").close(); render();
+      }},"Delete this run"));
+  },body=>{
+    const qty=num($("#prq",body).value), land=$("#prl",body).value;
+    if(!qty||qty<=0){ flash("How many cans?"); return false; }
+    if(!land){ flash("When does it land?"); return false; }
+    const saved=(S.cans||[]).find(x=>x.id===c.id);
+    if(!saved){ flash("Put the stock on hand in first"); return false; }
+    const rec=Object.assign({},saved);
+    const row={id:(r&&r.id)||uid("pr"), qty:qty, land:monday(land),
+      to:$("#prt",body).value, order:$("#pro",body).value||null,
+      note:$("#prn",body).value.trim()};
+    rec.runs=(rec.runs||[]).filter(x=>x.id!==row.id).concat([row]);
+    canSave(rec);
+    flash(n0(qty)+" cans landing w/c "+fmtWY(row.land));
+  },isNew?"Book it":"Save");
+}
 /* ---- the forecast, read for brewing ----
    Per SKU, only the two lines that matter when you are deciding what to brew:
    what is left in the coldroom at the end of each week, and what is booked to
